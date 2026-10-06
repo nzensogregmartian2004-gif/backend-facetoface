@@ -1,0 +1,1703 @@
+// Face to Face — schéma Prisma (étape 2 : authentification et utilisateurs ; étape 3 : contenu, feed, interactions)
+generator client {
+  provider = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AppLanguage {
+  FR
+  EN
+}
+
+enum CreatorEarningSource {
+  PAID_MESSAGE
+  PAID_CALL
+  VIDEO
+  SHORT
+  LIVE
+  CREATOR_SUBSCRIPTION
+  PAID_CONTENT
+  CUSTOM_VIDEO
+  GIFT
+  TIP
+  CREATOR_POOL
+  OTHER
+}
+
+enum CreatorEarningStatus {
+  PENDING
+  AVAILABLE
+  REVERSED
+}
+
+
+enum FraudStatus {
+  CLEAR
+  REVIEW
+  BLOCKED
+}
+
+enum FraudEventType {
+  VIEW
+  AD_IMPRESSION
+  AD_CLICK
+  PAYMENT
+}
+
+enum FraudDecision {
+  ALLOW
+  REVIEW
+  BLOCK
+}
+
+model FraudEvent {
+  id             String         @id @default(cuid())
+  userId         String?
+  type           FraudEventType
+  decision       FraudDecision
+  score          Int            @default(0)
+  reason         String
+  ipHash         String?        @db.VarChar(128)
+  userAgentHash  String?        @db.VarChar(128)
+  metadata       Json?
+  createdAt      DateTime       @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, type, createdAt])
+  @@index([ipHash, type, createdAt])
+  @@index([decision, createdAt])
+}
+
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DELETED
+}
+
+enum ProfileVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum MessagePolicy {
+  EVERYONE
+  FOLLOWERS
+  NOBODY
+}
+
+enum CodePurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+enum ReportTargetType {
+  USER
+  VIDEO
+  SHORT
+  LIVE
+  COMMENT
+  MESSAGE
+  PAID_CONTENT
+}
+
+enum ReportReason {
+  SPAM
+  HARASSMENT
+  HATE
+  NUDITY
+  VIOLENCE
+  SCAM
+  IMPERSONATION
+  MINOR_SAFETY
+  OTHER
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  HIDDEN
+  REMOVED
+}
+
+enum ContentVisibility {
+  PUBLIC
+  UNLISTED
+  PRIVATE
+}
+
+enum VideoProcessingStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+// Cible d'un like, d'un commentaire ou d'une vue (polymorphe, sans clé étrangère : l'existence est validée par les services).
+enum ContentTargetType {
+  VIDEO
+  SHORT
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+enum PremiumBillingPeriod {
+  MONTHLY
+  ANNUAL
+}
+
+enum PremiumSubscriptionStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  TRIAL
+  EXPIRED
+  CANCELLED
+}
+
+enum PremiumPaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REVIEW
+}
+
+enum PremiumPromotionType {
+  PERCENT
+  FIXED
+}
+
+enum FinancialTransactionType {
+  PAYMENT
+  REFUND
+  WITHDRAWAL
+  ADJUSTMENT
+}
+
+enum FinancialTransactionStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum FinancialPaymentMethod {
+  MOBILE_MONEY
+  CARD
+  BANK_TRANSFER
+  WALLET
+  OTHER
+}
+
+enum WalletLedgerType {
+  EARNING
+  WITHDRAWAL_HOLD
+  WITHDRAWAL_COMPLETED
+  WITHDRAWAL_RELEASED
+  REFUND
+  ADJUSTMENT
+}
+
+enum WithdrawalStatus {
+  PENDING
+  REVIEW
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum WithdrawalMethod {
+  MOBILE_MONEY
+  BANK_TRANSFER
+  OTHER
+}
+
+enum AdFormat {
+  PRE_ROLL
+  MID_ROLL
+  SHORT_BETWEEN
+  NATIVE
+  BANNER
+  INTERSTITIAL
+  LIVE
+}
+
+enum AdPlacement {
+  HOME_FEED
+  VIDEO_PLAYER
+  SHORT_FEED
+  LIVE_PLAYER
+  SEARCH
+  PROFILE
+}
+
+enum AppConfigType {
+  STRING
+  INTEGER
+  DECIMAL
+  BOOLEAN
+  JSON
+}
+
+enum AppConfigCategory {
+  PREMIUM
+  COMMISSION
+  CREATOR_POOL
+  MONETIZATION
+  SHORTS
+  VIDEOS
+  LIVES
+  WITHDRAWALS
+  FEATURE_PRICING
+  ADVERTISING
+  PROMOTIONS
+  GENERAL
+}
+
+enum AdCampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+// Un seul type de compte : isCreator active les fonctions créateur sur le même compte.
+enum ModerationTargetType {
+  USER
+  VIDEO
+  SHORT
+  LIVE
+  COMMENT
+  MESSAGE
+  PAID_CONTENT
+}
+enum ModerationActionType {
+  WARNING
+  HIDE
+  UNHIDE
+  REMOVE
+  RESTORE
+  SUSPEND
+  BAN
+  UNSUSPEND
+  UNBAN
+  DISABLE_MONETIZATION
+  ENABLE_MONETIZATION
+}
+enum ProfileModerationStatus {
+  ACTIVE
+  HIDDEN
+}
+enum ModerationContentStatus {
+  ACTIVE
+  HIDDEN
+  REMOVED
+}
+
+model User {
+  id                 String            @id @default(cuid())
+  email              String            @unique
+  username           String            @unique
+  passwordHash       String
+  displayName        String
+  avatarUrl          String?
+  bio                String?
+  country            String?
+  links              String[]          @default([])
+  birthDate          DateTime          @db.Date
+  status             UserStatus        @default(ACTIVE)
+  emailVerifiedAt    DateTime?
+  isCreator          Boolean           @default(false)
+  creatorActivatedAt DateTime?
+  profileVisibility  ProfileVisibility @default(PUBLIC)
+  allowMessagesFrom  MessagePolicy     @default(EVERYONE)
+  showOnlineStatus   Boolean           @default(true)
+  preferredLanguage  AppLanguage       @default(FR)
+  preferredCurrency  String            @default("XAF") @db.VarChar(3)
+  failedLoginCount   Int               @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  fraudStatus        FraudStatus        @default(CLEAR)
+  fraudScore         Int                @default(0)
+  fraudFlaggedAt     DateTime?
+  profileModerationStatus ProfileModerationStatus @default(ACTIVE)
+  monetizationDisabledAt DateTime?
+  monetizationDisabledReason String?
+  passwordChangedAt  DateTime?
+  deletedAt          DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  sessions                Session[]
+  codes                   OneTimeCode[]
+  blocksMade              Block[]              @relation("Blocker")
+  blocksReceived          Block[]              @relation("Blocked")
+  reportsMade             Report[]             @relation("Reporter")
+  videos                  Video[]
+  shorts                  Short[]
+  likes                   Like[]
+  comments                Comment[]
+  views                   ContentView[]
+  following               Follow[]             @relation("Follower")
+  followers               Follow[]             @relation("Following")
+  conversationMemberships ConversationMember[]
+  messagesSent            Message[]
+  purchasesMade           MessagePurchase[]    @relation("Buyer")
+  purchasesEarned         MessagePurchase[]    @relation("Seller")
+  notifications           Notification[]       @relation("NotificationOwner")
+  notificationsCaused     Notification[]       @relation("NotificationActor")
+  callSettings            CreatorCallSettings?
+  creatorEarnings         CreatorEarning[]
+  creatorViewAllocations  CreatorViewAllocation[]
+  monetizationEligibility CreatorMonetizationEligibility?
+  callsMade               Call[]               @relation("Caller")
+  callsReceived           Call[]               @relation("Callee")
+  livesHosted              Live[]               @relation("Host")
+  liveViewerSessions       LiveViewer[]
+  liveChatMessages         LiveChatMessage[]
+  liveReactions            LiveReaction[]
+  creatorSubscriptionPlan  CreatorSubscriptionPlan? @relation("CreatorSubscriptionPlanOwner")
+  creatorSubscriptions     CreatorSubscription[] @relation("SubscriberSubscriptions")
+  subscriberSubscriptions  CreatorSubscription[] @relation("CreatorSubscribers")
+  subscriptionPaymentsMade CreatorSubscriptionPayment[] @relation("SubscriptionBuyer")
+  subscriptionPaymentsEarned CreatorSubscriptionPayment[] @relation("SubscriptionCreator")
+  customVideoRequestsMade CustomVideoRequest[] @relation("CustomVideoBuyer")
+  customVideoRequestsReceived CustomVideoRequest[] @relation("CustomVideoCreator")
+  customVideoPaymentsMade CustomVideoPayment[] @relation("CustomVideoPaymentBuyer")
+  customVideoPaymentsReceived CustomVideoPayment[] @relation("CustomVideoPaymentCreator")
+  wallets                 Wallet[]
+  financialTransactions   FinancialTransaction[] @relation("TransactionUser")
+  financialTransactionsAsCreator FinancialTransaction[] @relation("TransactionCreator")
+  withdrawals             Withdrawal[]
+  walletLedgerEntries     WalletLedgerEntry[]
+  adminAuditLogs          AdminAuditLog[]       @relation("AdminActions")
+  advertisingCampaigns   AdvertisingCampaign[] @relation("AdCampaignCreator")
+  adImpressions          AdImpression[] @relation("AdViewer")
+  adImpressionCreators   AdImpression[] @relation("AdCreator")
+  adClicks               AdClick[] @relation("AdClickUser")
+  premiumSubscription   PremiumSubscription?
+  premiumPayments       PremiumPayment[]
+  appConfigsUpdated     AppConfig[]        @relation("AppConfigUpdatedBy")
+  fraudEvents            FraudEvent[]
+  moderationActionsAdmin ModerationAction[] @relation("ModerationAdmin")
+  moderationActionsTargetUser ModerationAction[] @relation("ModerationTargetUser")
+  monetizationSettingVersions MonetizationSettingVersion[] @relation("MonetizationVersionAdmin")
+
+  @@index([status])
+}
+
+
+model AppConfig {
+  id          String            @id @default(cuid())
+  key         String            @unique
+  value       Json
+  type        AppConfigType
+  enabled     Boolean           @default(true)
+  description String
+  defaultValue Json
+  category    AppConfigCategory  @default(GENERAL)
+  updatedAt   DateTime          @updatedAt
+  updatedById String?
+
+  updatedBy User? @relation("AppConfigUpdatedBy", fields:[updatedById], references:[id], onDelete:SetNull)
+  monetizationSettingVersions MonetizationSettingVersion[] @relation("MonetizationVersionConfig")
+
+  @@index([category, enabled])
+  @@index([updatedById, updatedAt])
+}
+
+/// Taux de change historisé. Les montants financiers historiques restent dans leur devise d'origine.
+model ExchangeRate {
+  id             String   @id @default(cuid())
+  baseCurrency   String   @db.VarChar(3)
+  quoteCurrency  String   @db.VarChar(3)
+  rate           Decimal  @db.Decimal(24, 12)
+  source         String
+  fetchedAt      DateTime @default(now())
+  expiresAt      DateTime?
+
+  @@index([baseCurrency, quoteCurrency, fetchedAt])
+}
+
+/// Écriture de revenu créateur figée au moment où le revenu est reconnu.
+/// Tous les montants sont dans `currency`; aucune somme inter-devises n'est faite implicitement.
+model CreatorEarning {
+  id                 String                @id @default(cuid())
+  creatorId          String
+  source             CreatorEarningSource
+  sourceId           String
+  grossAmount        Int
+  platformFeeAmount  Int
+  creatorAmount      Int
+  currency           String                @db.VarChar(3)
+  commissionBps      Int
+  status             CreatorEarningStatus  @default(PENDING)
+  ruleVersion        String?
+  createdAt          DateTime              @default(now())
+  availableAt        DateTime?
+  reversedAt         DateTime?
+
+  creator User @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+
+  @@unique([source, sourceId])
+  @@index([creatorId, status, createdAt])
+  @@index([creatorId, currency, createdAt])
+}
+
+
+enum AdvertisingRevenueStatus {
+  RECEIVED
+  ALLOCATED
+  REVERSED
+}
+
+enum CreatorPoolStatus {
+  OPEN
+  ALLOCATED
+  CLOSED
+}
+
+enum ViewAllocationStatus {
+  ALLOCATED
+  REVERSED
+}
+
+/// Paramètres économiques de l'étape 8. Ils sont modifiables sans modifier le code.
+enum MonetizationApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model CreatorMonetizationEligibility {
+  id                    String                    @id @default(cuid())
+  creatorId             String                    @unique
+  status                MonetizationApprovalStatus @default(PENDING)
+  reviewedAt            DateTime?
+  reviewedByUserId      String?
+  rejectionReason       String?
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+
+  creator User @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+}
+
+model ViewMonetizationSetting {
+  id                  String   @id @default(cuid())
+  key                 String   @unique
+  value               Int
+  description         String
+  updatedByUserId     String?
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
+  monetizationSettingVersions MonetizationSettingVersion[] @relation("MonetizationVersionViewSetting")
+}
+
+model MonetizationSettingVersion {
+  id String @id @default(cuid())
+  version Int
+  settingKey String
+  oldValue Json?
+  newValue Json
+  adminId String?
+  changedAt DateTime @default(now())
+  reason String
+  configId String?
+  viewSettingId String?
+  admin User? @relation("MonetizationVersionAdmin", fields:[adminId], references:[id], onDelete:Restrict)
+  config AppConfig? @relation("MonetizationVersionConfig", fields:[configId], references:[id], onDelete:SetNull)
+  viewSetting ViewMonetizationSetting? @relation("MonetizationVersionViewSetting", fields:[viewSettingId], references:[id], onDelete:SetNull)
+  @@unique([version, settingKey])
+  @@index([settingKey, changedAt])
+  @@index([adminId, changedAt])
+  @@index([version, changedAt])
+}
+
+/// Revenus publicitaires réellement encaissés par la plateforme.
+/// Tous les montants sont exprimés en unités mineures de `currency`.
+model AdvertisingRevenue {
+  id                    String                  @id @default(cuid())
+  externalReference     String?                 @unique
+  currency              String                  @db.VarChar(3)
+  grossAmount           Int
+  platformShareBps      Int
+  creatorPoolShareBps   Int
+  creatorPoolAmount     Int
+  status                AdvertisingRevenueStatus @default(RECEIVED)
+  receivedAt            DateTime
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  ruleVersion           String?
+  creatorPoolId         String?
+
+  creatorPool CreatorPool? @relation(fields: [creatorPoolId], references: [id], onDelete: SetNull)
+  adImpression AdImpression?
+
+  @@index([currency, receivedAt])
+  @@index([status, receivedAt])
+}
+
+/// Pool de rémunération rattaché à une période et une devise.
+model CreatorPool {
+  id                    String             @id @default(cuid())
+  periodStart           DateTime
+  periodEnd             DateTime
+  currency              String             @db.VarChar(3)
+  grossAdRevenue        Int
+  creatorPoolAmount     Int
+  qualifiedViews        BigInt             @default(0)
+  allocatedAmount       Int                @default(0)
+  status                CreatorPoolStatus  @default(OPEN)
+  ruleVersion           String?
+  createdAt             DateTime           @default(now())
+  allocatedAt           DateTime?
+
+  adRevenue             AdvertisingRevenue[]
+  allocations           CreatorViewAllocation[]
+
+  @@unique([periodStart, periodEnd, currency])
+  @@index([currency, periodStart, periodEnd])
+  @@index([status, currency])
+}
+
+/// Répartition immuable d'un Creator Pool entre les créateurs selon leurs vues qualifiées.
+model CreatorViewAllocation {
+  id                    String                 @id @default(cuid())
+  poolId                String
+  creatorId             String
+  currency              String                @db.VarChar(3)
+  qualifiedViews        BigInt
+  totalQualifiedViews  BigInt
+  shareBps              Int
+  grossAmount           Int
+  status                ViewAllocationStatus  @default(ALLOCATED)
+  createdAt             DateTime               @default(now())
+
+  pool    CreatorPool @relation(fields: [poolId], references: [id], onDelete: Restrict)
+  creator User        @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+
+  @@unique([poolId, creatorId])
+  @@index([creatorId, currency, createdAt])
+  @@index([poolId, status])
+}
+
+model PremiumSetting {
+  id                    String   @id @default("default")
+  enabled               Boolean  @default(true)
+  monthlyPriceMinor    Int      @default(9500)
+  annualPriceMinor     Int      @default(114000)
+  currency              String   @default("XAF") @db.VarChar(3)
+  trialEnabled          Boolean  @default(false)
+  trialDays             Int      @default(7)
+  autoRenewEnabled      Boolean  @default(true)
+  benefits              Json
+  updatedByUserId       String?
+  updatedAt             DateTime @updatedAt
+  createdAt             DateTime @default(now())
+
+}
+
+model PremiumPromotion {
+  id                String               @id @default(cuid())
+  code              String               @unique
+  type              PremiumPromotionType
+  value             Int
+  currency          String?              @db.VarChar(3)
+  startsAt          DateTime
+  endsAt            DateTime
+  maxRedemptions    Int?
+  redemptionCount   Int                  @default(0)
+  isActive          Boolean              @default(true)
+  createdById       String
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@index([isActive, startsAt, endsAt])
+}
+
+model PremiumSubscription {
+  id                String                   @id @default(cuid())
+  userId            String                   @unique
+  status            PremiumSubscriptionStatus @default(PENDING_PAYMENT)
+  billingPeriod     PremiumBillingPeriod
+  currency          String                   @db.VarChar(3)
+  priceAmount       Int
+  discountAmount    Int                      @default(0)
+  startedAt         DateTime?
+  expiresAt         DateTime?
+  trialEndsAt       DateTime?
+  autoRenew         Boolean                  @default(true)
+  cancelledAt       DateTime?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments PremiumPayment[]
+
+  @@index([status, expiresAt])
+}
+
+model PremiumPayment {
+  id                String              @id @default(cuid())
+  subscriptionId    String
+  userId            String
+  billingPeriod     PremiumBillingPeriod
+  grossAmount       Int
+  discountAmount    Int                 @default(0)
+  netAmount         Int
+  currency          String              @db.VarChar(3)
+  status            PremiumPaymentStatus @default(PENDING)
+  reference         String              @unique
+  operator          String?
+  payerPhoneHint    String?
+  externalRef       String?
+  providerPayload   Json?
+  reviewReason      String?
+  promotionCode     String?
+  initiatedAt       DateTime            @default(now())
+  paidAt            DateTime?
+
+  subscription PremiumSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, status, initiatedAt])
+  @@index([subscriptionId, initiatedAt])
+}
+
+model AdvertisingSetting {
+  id                        String   @id @default(cuid())
+  enabled                   Boolean  @default(true)
+  defaultFrequencyCap       Int      @default(3)
+  defaultFrequencyWindowHours Int     @default(24)
+  creatorShareBps           Int      @default(4000)
+  updatedByUserId           String?
+  updatedAt                 DateTime @updatedAt
+  createdAt                 DateTime @default(now())
+}
+
+model AdvertisingCampaign {
+  id                    String            @id @default(cuid())
+  createdById            String
+  name                  String
+  headline              String
+  body                  String?
+  mediaUrl              String?
+  clickUrl              String?
+  status                AdCampaignStatus @default(DRAFT)
+  currency              String            @db.VarChar(3)
+  budgetAmount          Int
+  spentAmount           Int               @default(0)
+  pricePerImpression    Int
+  formats               AdFormat[]
+  placements            AdPlacement[]
+  targetLanguages       AppLanguage[]
+  targetCountries       String[]          @default([])
+  targetCategories      String[]          @default([])
+  frequencyCap          Int?
+  frequencyWindowHours  Int?
+  startsAt              DateTime
+  endsAt                DateTime
+  activatedAt           DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  createdBy             User              @relation("AdCampaignCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  impressions           AdImpression[]
+
+  @@index([status, startsAt, endsAt])
+  @@index([currency, status])
+}
+
+model AdImpression {
+  id                    String       @id @default(cuid())
+  campaignId            String
+  userId                String?
+  creatorId             String?
+  format                AdFormat
+  placement             AdPlacement
+  contentType           String?
+  contentId             String?
+  category              String?
+  eventKey              String       @unique
+  chargedAmount         Int
+  creatorPoolAmount     Int
+  platformAmount        Int
+  currency              String       @db.VarChar(3)
+  advertisingRevenueId  String?      @unique
+  createdAt             DateTime     @default(now())
+
+  campaign              AdvertisingCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  user                  User?        @relation("AdViewer", fields: [userId], references: [id], onDelete: SetNull)
+  creator               User?        @relation("AdCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  advertisingRevenue    AdvertisingRevenue? @relation(fields: [advertisingRevenueId], references: [id], onDelete: SetNull)
+  click                 AdClick?
+
+  @@index([campaignId, createdAt])
+  @@index([userId, campaignId, createdAt])
+  @@index([creatorId, createdAt])
+}
+
+model AdClick {
+  id           String       @id @default(cuid())
+  impressionId String       @unique
+  userId       String?
+  createdAt    DateTime     @default(now())
+
+  impression   AdImpression @relation(fields: [impressionId], references: [id], onDelete: Cascade)
+  user         User?        @relation("AdClickUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+}
+
+enum LiveStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+enum LiveVisibility {
+  PUBLIC
+  UNLISTED
+}
+
+enum LiveAccess {
+  EVERYONE
+  SUBSCRIBERS
+}
+
+enum LiveReactionType {
+  LIKE
+  LOVE
+  FIRE
+  WOW
+}
+
+/// Diffusion Live. La vidéo/audio temps réel est fournie par le futur fournisseur de streaming ;
+/// cette entité gère le cycle de vie, les spectateurs et les statistiques applicatives.
+model Live {
+  id                  String          @id @default(cuid())
+  hostId              String
+  title               String
+  description         String?
+  thumbnailKey        String?
+  visibility          LiveVisibility  @default(PUBLIC)
+  access              LiveAccess      @default(EVERYONE)
+  status              LiveStatus      @default(SCHEDULED)
+  moderationStatus    ModerationContentStatus @default(ACTIVE)
+  scheduledAt         DateTime?
+  startedAt           DateTime?
+  endedAt             DateTime?
+  streamKey           String          @unique
+  currentViewers      Int             @default(0)
+  peakViewers         Int             @default(0)
+  uniqueViewers       Int             @default(0)
+  totalWatchSeconds   BigInt          @default(0)
+  totalMessages       Int             @default(0)
+  totalReactions      Int             @default(0)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  host                User            @relation("Host", fields: [hostId], references: [id], onDelete: Cascade)
+  moderationActions   ModerationAction[]
+  viewers             LiveViewer[]
+  chatMessages        LiveChatMessage[]
+  reactions           LiveReaction[]
+
+  @@index([hostId, status, scheduledAt])
+  @@index([status, scheduledAt])
+}
+
+model LiveViewer {
+  id              String    @id @default(cuid())
+  liveId          String
+  userId          String
+  joinedAt        DateTime  @default(now())
+  leftAt          DateTime?
+  watchSeconds    Int       @default(0)
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  live            Live      @relation(fields: [liveId], references: [id], onDelete: Cascade)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([liveId, userId])
+  @@index([liveId, isActive])
+  @@index([userId, createdAt])
+}
+
+model LiveChatMessage {
+  id          String    @id @default(cuid())
+  liveId      String
+  authorId    String
+  text        String
+  createdAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  live        Live      @relation(fields: [liveId], references: [id], onDelete: Cascade)
+  author      User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([liveId, createdAt])
+}
+
+model LiveReaction {
+  id          String            @id @default(cuid())
+  liveId      String
+  userId      String
+  type        LiveReactionType
+  count       Int               @default(1)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  live        Live              @relation(fields: [liveId], references: [id], onDelete: Cascade)
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([liveId, userId, type])
+  @@index([liveId, type])
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  refreshTokenHash String
+  userAgent        String?
+  ip               String?
+  createdAt        DateTime  @default(now())
+  lastUsedAt       DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model OneTimeCode {
+  id         String      @id @default(cuid())
+  userId     String
+  purpose    CodePurpose
+  codeHash   String
+  attempts   Int         @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+model Report {
+  id         String           @id @default(cuid())
+  reporterId String
+  targetType ReportTargetType
+  targetId   String
+  reason     ReportReason
+  details    String?
+  status     ReportStatus     @default(OPEN)
+  createdAt  DateTime         @default(now())
+  resolvedAt DateTime?
+
+  reporter User @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  moderationActions ModerationAction[]
+
+  @@index([targetType, targetId])
+  @@index([status])
+  @@index([reporterId])
+}
+
+// ── Étape 3 : contenu ───────────────────────────────────────────────
+// Les fichiers vidéo ne sont JAMAIS en base : seulement des clés d'objet (stockage objet + CDN, voir ARCHITECTURE.md).
+model Video {
+  id              String            @id @default(cuid())
+  authorId        String
+  title           String
+  description     String?
+  category        String
+  visibility      ContentVisibility @default(PUBLIC)
+  status          ContentStatus     @default(DRAFT)
+  allowDownload   Boolean           @default(false)
+  subscriptionOnly Boolean           @default(false)
+  allowComments   Boolean           @default(true)
+  videoKey        String?
+  thumbnailKey    String?
+  mimeType        String?
+  sizeBytes       Int?
+  durationSeconds Int?
+  width           Int?
+  height          Int?
+  uploadedAt      DateTime?
+  publishedAt     DateTime?
+  viewCount       Int               @default(0)
+  likeCount       Int               @default(0)
+  commentCount    Int               @default(0)
+  shareCount      Int               @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  deletedAt       DateTime?
+  isOriginal      Boolean          @default(true)
+  processingStatus VideoProcessingStatus @default(PENDING)
+  processingError String?
+  processedAt     DateTime?
+  manifestKey     String?
+  variants        VideoVariant[] @relation("VideoVariants")
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  moderationActions ModerationAction[]
+
+  @@index([authorId, status])
+  @@index([status, visibility, publishedAt])
+  @@index([category])
+}
+
+model Short {
+  id              String            @id @default(cuid())
+  authorId        String
+  title           String
+  description     String?
+  category        String
+  visibility      ContentVisibility @default(PUBLIC)
+  status          ContentStatus     @default(DRAFT)
+  allowDownload   Boolean           @default(false)
+  subscriptionOnly Boolean           @default(false)
+  allowComments   Boolean           @default(true)
+  videoKey        String?
+  thumbnailKey    String?
+  mimeType        String?
+  sizeBytes       Int?
+  durationSeconds Int?
+  width           Int?
+  height          Int?
+  uploadedAt      DateTime?
+  publishedAt     DateTime?
+  viewCount       Int               @default(0)
+  likeCount       Int               @default(0)
+  commentCount    Int               @default(0)
+  shareCount      Int               @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  deletedAt       DateTime?
+  isOriginal      Boolean          @default(true)
+  processingStatus VideoProcessingStatus @default(PENDING)
+  processingError String?
+  processedAt     DateTime?
+  manifestKey     String?
+  variants        VideoVariant[] @relation("ShortVariants")
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  moderationActions ModerationAction[]
+
+  @@index([authorId, status])
+  @@index([status, visibility, publishedAt])
+  @@index([category])
+}
+
+
+model VideoVariant {
+  id          String   @id @default(cuid())
+  contentId   String
+  height      Int
+  width       Int?
+  bitrateKbps Int?
+  mimeType    String   @default("video/mp4")
+  objectKey   String
+  createdAt   DateTime @default(now())
+
+  video       Video?   @relation("VideoVariants", fields: [videoId], references: [id], onDelete: Cascade)
+  short       Short?   @relation("ShortVariants", fields: [shortId], references: [id], onDelete: Cascade)
+  videoId     String?
+  shortId     String?
+
+  @@unique([videoId, height])
+  @@unique([shortId, height])
+  @@index([contentId])
+}
+
+model Like {
+  id         String            @id @default(cuid())
+  userId     String
+  targetType ContentTargetType
+  targetId   String
+  createdAt  DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@index([userId, createdAt])
+}
+
+// Suppression douce (deletedAt) : le texte reste disponible pour la modération (signalements).
+model Comment {
+  id         String            @id @default(cuid())
+  authorId   String
+  targetType ContentTargetType
+  targetId   String
+  text       String
+  createdAt  DateTime          @default(now())
+  deletedAt  DateTime?
+  moderationStatus ModerationContentStatus @default(ACTIVE)
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  moderationActions ModerationAction[]
+
+  @@index([targetType, targetId, createdAt])
+  @@index([authorId])
+}
+
+// Une ligne par vue comptée (dédoublonnée par utilisateur et par fenêtre de temps). Les vues qualifiées et l'anti-fraude arrivent aux étapes 8, 9 et 20.
+model ContentView {
+  id             String            @id @default(cuid())
+  userId         String
+  targetType     ContentTargetType
+  targetId       String
+  watchedSeconds Int               @default(0)
+  createdAt      DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, targetType, targetId, createdAt])
+  @@index([targetType, targetId])
+}
+
+// Fondation minimale pour le feed « Abonnements ». Compteurs, listes et écrans : étape 4.
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+}
+
+
+enum CreatorSubscriptionStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  CANCELLED
+  EXPIRED
+}
+
+enum CreatorSubscriptionPaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REVIEW
+}
+
+/// Offre d'abonnement mensuel d'un créateur. Les avantages sont stockés comme configuration de produit, sans imposer de moyen de paiement.
+model CreatorSubscriptionPlan {
+  id                    String   @id @default(cuid())
+  creatorId             String   @unique
+  priceMinor            Int
+  currency              String   @db.VarChar(3)
+  benefits              Json
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  creator       User                   @relation("CreatorSubscriptionPlanOwner", fields: [creatorId], references: [id], onDelete: Cascade)
+  subscriptions CreatorSubscription[]
+
+  @@index([isActive, creatorId])
+}
+
+/// Droit d'accès d'un utilisateur aux avantages d'un créateur. Un abonnement actif couvre un mois à partir du paiement confirmé.
+model CreatorSubscription {
+  id          String                    @id @default(cuid())
+  subscriberId String
+  creatorId   String
+  planId      String
+  status      CreatorSubscriptionStatus @default(PENDING_PAYMENT)
+  currency    String                    @db.VarChar(3)
+  priceMinor  Int
+  startedAt   DateTime?
+  expiresAt   DateTime?
+  cancelledAt DateTime?
+  autoRenew   Boolean                   @default(false)
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  subscriber User                    @relation("SubscriberSubscriptions", fields: [subscriberId], references: [id], onDelete: Restrict)
+  creator    User                    @relation("CreatorSubscribers", fields: [creatorId], references: [id], onDelete: Restrict)
+  plan       CreatorSubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  payments   CreatorSubscriptionPayment[]
+
+  @@unique([subscriberId, creatorId])
+  @@index([creatorId, status, expiresAt])
+  @@index([subscriberId, status, expiresAt])
+}
+
+/// Tentative de paiement d'un abonnement, conservée séparément pour l'audit et l'idempotence.
+model CreatorSubscriptionPayment {
+  id              String                           @id @default(cuid())
+  subscriptionId  String
+  buyerId         String
+  creatorId       String
+  grossFcfa       Int
+  commissionFcfa  Int
+  creatorFcfa     Int
+  commissionBps   Int
+  status          CreatorSubscriptionPaymentStatus @default(PENDING)
+  reference       String?                          @unique
+  attempts        Int                              @default(1)
+  initiatedAt     DateTime                         @default(now())
+  operator        String?
+  payerPhoneHint  String?
+  externalRef     String?
+  reviewReason    String?
+  providerPayload Json?
+  createdAt       DateTime                         @default(now())
+  paidAt          DateTime?
+
+  subscription CreatorSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  buyer        User                @relation("SubscriptionBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  creator      User                @relation("SubscriptionCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+
+  @@index([creatorId, status])
+  @@index([buyerId, status])
+  @@index([status, initiatedAt])
+}
+
+
+
+// ── Étape 12 : vidéos personnalisées ───────────────────────────────
+enum CustomVideoStatus {
+  REQUESTED
+  AWAITING_PAYMENT
+  PAYMENT_PENDING
+  PAYMENT_REVIEW
+  AWAITING_CREATOR
+  ACCEPTED
+  IN_PROGRESS
+  DELIVERED
+  COMPLETED
+  DECLINED
+  CANCELLED
+  REFUND_DUE
+  DISPUTED
+  EXPIRED
+}
+
+enum CustomVideoPaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REVIEW
+}
+
+/// Demande de vidéo personnalisée. Le prix et le délai sont figés avant le paiement.
+/// Les fichiers vidéo sont stockés dans Object Storage, jamais dans PostgreSQL.
+model CustomVideoRequest {
+  id             String           @id @default(cuid())
+  buyerId        String
+  creatorId      String
+  requestText    String
+  priceFcfa      Int?
+  currency       String           @db.VarChar(3)
+  deadlineAt     DateTime?
+  status         CustomVideoStatus @default(REQUESTED)
+  acceptedAt     DateTime?
+  declinedAt     DateTime?
+  cancelledAt    DateTime?
+  deliveredAt    DateTime?
+  completedAt    DateTime?
+  disputedAt    DateTime?
+  disputeReason String?
+  refundDueAt   DateTime?
+  videoKey      String?
+  mimeType      String?
+  sizeBytes     Int?
+  durationSeconds Int?
+  uploadedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  buyer   User @relation("CustomVideoBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  creator User @relation("CustomVideoCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  payments CustomVideoPayment[]
+
+  @@index([buyerId, status, createdAt])
+  @@index([creatorId, status, createdAt])
+  @@index([status, deadlineAt])
+}
+
+/// Tentative de paiement d'une vidéo personnalisée, conservée pour l'audit et l'idempotence.
+model CustomVideoPayment {
+  id             String                    @id @default(cuid())
+  requestId      String
+  buyerId        String
+  creatorId      String
+  grossFcfa      Int
+  commissionFcfa Int
+  creatorFcfa    Int
+  commissionBps  Int
+  status         CustomVideoPaymentStatus  @default(PENDING)
+  reference      String?                   @unique
+  operator       String?
+  payerPhoneHint String?
+  externalRef    String?
+  reviewReason   String?
+  providerPayload Json?
+  initiatedAt    DateTime                  @default(now())
+  createdAt      DateTime                  @default(now())
+  paidAt         DateTime?
+
+  request CustomVideoRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  buyer   User @relation("CustomVideoPaymentBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  creator User @relation("CustomVideoPaymentCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+
+  @@index([buyerId, status])
+  @@index([creatorId, status])
+  @@index([status, initiatedAt])
+}
+
+// ── Étape 13 : portefeuille, registre financier et retraits ─────────
+model Wallet {
+  id               String   @id @default(cuid())
+  userId           String
+  currency         String   @db.VarChar(3)
+  availableAmount  Int      @default(0)
+  pendingAmount    Int      @default(0)
+  withdrawnAmount  Int      @default(0)
+  blockedAmount    Int      @default(0)
+  refundedAmount   Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user             User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledger           WalletLedgerEntry[]
+
+  @@unique([userId, currency])
+  @@index([userId, updatedAt])
+}
+
+model WalletLedgerEntry {
+  id             String           @id @default(cuid())
+  walletId       String
+  userId         String
+  type           WalletLedgerType
+  amount         Int
+  balanceAfter   Int
+  currency       String           @db.VarChar(3)
+  sourceType     String?
+  sourceId       String?
+  description    String?
+  createdAt      DateTime         @default(now())
+
+  wallet         Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  user           User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([sourceType, sourceId, type])
+  @@index([walletId, createdAt])
+  @@index([userId, currency, createdAt])
+}
+
+model FinancialTransaction {
+  id                 String                     @id @default(cuid())
+  reference          String                     @unique
+  type               FinancialTransactionType
+  status             FinancialTransactionStatus @default(PENDING)
+  userId             String
+  creatorId          String?
+  grossAmount        Int
+  platformFeeAmount  Int                  @default(0)
+  creatorAmount      Int                  @default(0)
+  refundedAmount     Int                  @default(0)
+  currency           String               @db.VarChar(3)
+  method             FinancialPaymentMethod
+  externalReference  String?
+  sourceType         String
+  sourceId           String
+  refundStatus       String?
+  failureReason      String?
+  metadata           Json?
+  createdAt          DateTime             @default(now())
+  paidAt             DateTime?
+  completedAt        DateTime?
+  refundedAt         DateTime?
+  updatedAt          DateTime             @updatedAt
+
+  user               User    @relation("TransactionUser", fields: [userId], references: [id], onDelete: Restrict)
+  creator            User?   @relation("TransactionCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+
+  @@unique([sourceType, sourceId])
+  @@index([userId, createdAt])
+  @@index([creatorId, createdAt])
+  @@index([status, createdAt])
+  @@index([currency, createdAt])
+}
+
+model Withdrawal {
+  id                 String           @id @default(cuid())
+  userId             String
+  currency           String           @db.VarChar(3)
+  amount             Int
+  fee                Int              @default(0)
+  netAmount          Int
+  method             WithdrawalMethod
+  destinationHint    String
+  status             WithdrawalStatus @default(PENDING)
+  externalReference  String?          @unique
+  failureReason      String?
+  requestedAt        DateTime         @default(now())
+  processedAt        DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  user               User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, currency, status, requestedAt])
+  @@index([status, requestedAt])
+}
+
+// ── Étape 5 : messagerie, messages payants, notifications ───────────
+enum MessageKind {
+  TEXT
+  MEDIA
+}
+
+enum PurchaseStatus {
+  PENDING
+  PAID
+  FAILED
+  /// Paiement à vérifier à la main (aucune réponse du prestataire après le délai, montant différent, succès tardif après un échec). Bloque tout nouvel essai : pas de double débit.
+  REVIEW
+}
+
+enum NotificationType {
+  NEW_MESSAGE
+  MESSAGE_PURCHASED
+  CREATOR_SUBSCRIPTION_PURCHASED
+  CREATOR_SUBSCRIPTION_CANCELLED
+  CUSTOM_VIDEO_REQUESTED
+  CUSTOM_VIDEO_PAYMENT_CONFIRMED
+  CUSTOM_VIDEO_DELIVERED
+  CUSTOM_VIDEO_COMPLETED
+  CUSTOM_VIDEO_DECLINED
+}
+
+/// Une conversation privée entre deux utilisateurs exactement. `pairKey` = les deux identifiants triés, « a:b » (unicité de la paire).
+model Conversation {
+  id            String    @id @default(cuid())
+  pairKey       String    @unique
+  lastMessageAt DateTime?
+  lastMessageId String?
+  createdAt     DateTime  @default(now())
+
+  members  ConversationMember[]
+  messages Message[]
+
+  @@index([lastMessageAt])
+}
+
+/// État de la conversation pour un participant : non-lus (dénormalisé, modifié dans la transaction du message), masquage, historique effacé.
+model ConversationMember {
+  id             String    @id @default(cuid())
+  conversationId String
+  userId         String
+  lastReadAt     DateTime?
+  unreadCount    Int       @default(0)
+  hiddenAt       DateTime?
+  clearedAt      DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId, hiddenAt])
+}
+
+/// Message texte ou média. Un média n'est jamais en base : `mediaKey` est une clé du stockage objet.
+/// `priceFcfa` non nul = message payant : le destinataire ne voit le contenu qu'après achat (MessagePurchase PAID).
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  senderId       String
+  kind           MessageKind
+  text           String?
+  mediaKey       String?
+  mediaMime      String?
+  mediaSize      Int?
+  priceFcfa      Int?
+  clientId       String?
+  createdAt      DateTime    @default(now())
+  deletedAt      DateTime?
+  moderationStatus ModerationContentStatus @default(ACTIVE)
+
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User              @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  purchases    MessagePurchase[]
+  moderationActions ModerationAction[]
+
+  @@unique([senderId, clientId])
+  @@index([conversationId, createdAt])
+}
+
+/// Achat d'un message payant. Montants entiers en FCFA, figés à la création : brut = commission + part créateur (invariant testé).
+/// `commissionBps` conserve la règle appliquée (principe financier du cahier des charges : chaque revenu est traçable).
+model MessagePurchase {
+  id              String         @id @default(cuid())
+  messageId       String
+  buyerId         String
+  sellerId        String
+  grossFcfa       Int
+  commissionFcfa  Int
+  creatorFcfa     Int
+  commissionBps   Int
+  status          PurchaseStatus @default(PENDING)
+  /// Référence marchand de la tentative en cours (≤ 13 caractères, exigence MyPVit), unique ; renouvelée à chaque nouvel essai après un échec définitif.
+  reference       String?        @unique
+  attempts        Int            @default(1)
+  /// Début de la tentative en cours (sert au rapprochement des paiements restés PENDING).
+  initiatedAt     DateTime       @default(now())
+  method          String?
+  /// Opérateur Mobile Money choisi (AIRTEL_MONEY | MOOV_MONEY).
+  operator        String?
+  /// 4 derniers chiffres du numéro payeur (support) — le numéro complet n'est jamais conservé.
+  payerPhoneHint  String?
+  /// Identifiant de la transaction chez le prestataire.
+  externalRef     String?
+  reviewReason    String?
+  /// Dernière réponse brute du prestataire (callback), pour l'audit.
+  providerPayload Json?
+  createdAt       DateTime       @default(now())
+  paidAt          DateTime?
+
+  // RESTRICT : un achat est une écriture financière (cahier des charges §45) ; il ne disparaît jamais en cascade.
+  message Message @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  buyer   User    @relation("Buyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  seller  User    @relation("Seller", fields: [sellerId], references: [id], onDelete: Restrict)
+
+  @@unique([messageId, buyerId])
+  @@index([sellerId, status])
+  @@index([status, initiatedAt])
+}
+
+model Notification {
+  id         String           @id @default(cuid())
+  userId     String
+  type       NotificationType
+  actorId    String?
+  targetType String?
+  targetId   String?
+  count      Int              @default(1)
+  amountFcfa Int?
+  readAt     DateTime?
+  createdAt  DateTime         @default(now())
+
+  user  User  @relation("NotificationOwner", fields: [userId], references: [id], onDelete: Cascade)
+  actor User? @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+// ── Étape 6 : appels audio/vidéo payants ───────────────────────────
+enum CallType {
+  AUDIO
+  VIDEO
+}
+
+enum CallPricingMode {
+  PER_MINUTE
+  PER_SESSION
+}
+
+/// Qui peut appeler un créateur. `SUBSCRIBERS` (abonnés payants) sera ajouté à l'étape 11.
+enum CallAccess {
+  EVERYONE
+  FOLLOWERS
+  SUBSCRIBERS
+}
+
+enum CallStatus {
+  /// Demande créée, paiement Mobile Money en attente de validation par le client.
+  AWAITING_PAYMENT
+  /// Paiement échoué, refusé ou passé en vérification : l'appel n'a jamais sonné.
+  PAYMENT_FAILED
+  /// Payé : le créateur est appelé (jusqu'à `ringExpiresAt`).
+  RINGING
+  /// Accepté : le décompte tourne (`answeredAt` → `endsAt`).
+  ACTIVE
+  ENDED
+  DECLINED
+  MISSED
+  CANCELLED
+}
+
+enum CallEndReason {
+  HANGUP
+  MAX_DURATION
+  RING_TIMEOUT
+  DECLINED
+  CANCELLED
+  CREATOR_BUSY
+  STALE_PAYMENT
+}
+
+enum RefundStatus {
+  NONE
+  /// Remboursement dû au payeur ; exécuté à l'étape 13 (portefeuille / remboursements).
+  DUE
+  REFUNDED
+}
+
+/// Réglages d'appel d'un créateur (une ligne par créateur). Prix en FCFA entiers ; un prix nul = ce type d'appel est désactivé.
+model CreatorCallSettings {
+  userId             String          @id
+  pricingMode        CallPricingMode @default(PER_MINUTE)
+  audioPriceFcfa     Int?
+  videoPriceFcfa     Int?
+  maxDurationMinutes Int             @default(30)
+  access             CallAccess      @default(EVERYONE)
+  isAvailable        Boolean         @default(false)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Un appel payé d'avance. Écriture financière : jamais supprimée en cascade (RESTRICT).
+/// Prépayé (`grossFcfa`) → consommé (`consumedFcfa`, selon la durée réelle) + remboursement dû (`refundFcfa`).
+/// Sur le consommé : commission plateforme + part créateur, avec la règle appliquée (`commissionBps`) conservée (cahier des charges §45).
+/// Invariants : grossFcfa = consumedFcfa + refundFcfa ; consumedFcfa = commissionFcfa + creatorFcfa.
+model Call {
+  id               String          @id @default(cuid())
+  callerId         String
+  calleeId         String
+  type             CallType
+  pricingMode      CallPricingMode
+  /// Prix unitaire figé à la demande : par minute, ou de la session entière.
+  unitPriceFcfa    Int
+  /// Minutes prépayées (par minute) ou durée maximale de la session (par session).
+  requestedMinutes Int
+  status           CallStatus      @default(AWAITING_PAYMENT)
+  endReason        CallEndReason?
+
+  // Paiement (même principe que MessagePurchase : jamais de service avant PAID, jamais de nouvel essai sur un sort inconnu).
+  grossFcfa       Int
+  commissionBps   Int
+  paymentStatus   PurchaseStatus @default(PENDING)
+  reference       String?        @unique
+  operator        String?
+  payerPhoneHint  String?
+  externalRef     String?
+  reviewReason    String?
+  providerPayload Json?
+  initiatedAt     DateTime       @default(now())
+  paidAt          DateTime?
+
+  // Cycle de vie
+  ringExpiresAt DateTime?
+  answeredAt    DateTime?
+  endsAt        DateTime?
+  endedAt       DateTime?
+  actualSeconds Int?
+
+  // Décompte (renseigné à la clôture)
+  consumedFcfa   Int?
+  commissionFcfa Int?
+  creatorFcfa    Int?
+  refundFcfa     Int          @default(0)
+  refundStatus   RefundStatus @default(NONE)
+
+  // Litige (traité par l'administration à l'étape 16)
+  disputedAt    DateTime?
+  disputeReason String?
+
+  createdAt DateTime @default(now())
+
+  caller User @relation("Caller", fields: [callerId], references: [id], onDelete: Restrict)
+  callee User @relation("Callee", fields: [calleeId], references: [id], onDelete: Restrict)
+
+  @@index([callerId, createdAt])
+  @@index([calleeId, createdAt])
+  @@index([calleeId, status])
+  @@index([callerId, status])
+  @@index([status, ringExpiresAt])
+  @@index([status, endsAt])
+  @@index([paymentStatus, initiatedAt])
+}
+
+
+// ── Étape 16 : administration ─────────────────────────────────────
+model ModerationAction {
+  id String @id @default(cuid())
+  adminId String
+  action ModerationActionType
+  targetType ModerationTargetType
+  targetId String
+  reason String
+  reportId String?
+  metadata Json?
+  createdAt DateTime @default(now())
+  targetUserId String?
+  targetVideoId String?
+  targetShortId String?
+  targetLiveId String?
+  targetCommentId String?
+  targetMessageId String?
+  admin User @relation("ModerationAdmin", fields:[adminId], references:[id], onDelete:Restrict)
+  report Report? @relation(fields:[reportId], references:[id], onDelete:SetNull)
+  targetUser User? @relation("ModerationTargetUser", fields:[targetUserId], references:[id], onDelete:Cascade)
+  targetVideo Video? @relation(fields:[targetVideoId], references:[id], onDelete:Cascade)
+  targetShort Short? @relation(fields:[targetShortId], references:[id], onDelete:Cascade)
+  targetLive Live? @relation(fields:[targetLiveId], references:[id], onDelete:Cascade)
+  targetComment Comment? @relation(fields:[targetCommentId], references:[id], onDelete:Cascade)
+  targetMessage Message? @relation(fields:[targetMessageId], references:[id], onDelete:Cascade)
+  @@index([targetType,targetId,createdAt])
+  @@index([adminId,createdAt])
+  @@index([reportId])
+}
+
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  adminId    String
+  action     String
+  targetType String
+  targetId   String
+  reason     String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  admin User @relation("AdminActions", fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([adminId, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@index([action, createdAt])
+}

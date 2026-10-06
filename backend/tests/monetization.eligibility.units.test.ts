@@ -1,0 +1,23 @@
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_MONETIZATION_CONDITIONS } from '../src/modules/monetization/eligibility.service';
+
+describe('Step 9 — conditions de monétisation', () => {
+  it('respecte les seuils initiaux du cahier des charges', () => {
+    expect(DEFAULT_MONETIZATION_CONDITIONS.MIN_SUBSCRIBERS).toBe(500);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.MIN_WATCH_TIME_SECONDS).toBe(3_000 * 60 * 60);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.WATCH_TIME_PERIOD_DAYS).toBe(365);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.MIN_SHORT_VIEWS).toBe(3_000_000);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.SHORTS_PERIOD_DAYS).toBe(90);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.MIN_PUBLICATIONS).toBe(3);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.PUBLICATIONS_PERIOD_DAYS).toBe(90);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.MIN_PAYOUT_AGE).toBe(18);
+  });
+
+  it('active par défaut la validation manuelle et les exclusions prévues', () => {
+    expect(DEFAULT_MONETIZATION_CONDITIONS.REQUIRE_MANUAL_VALIDATION).toBe(1);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.REQUIRE_ORIGINAL_CONTENT).toBe(1);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.EXCLUDE_ARTIFICIAL_VIEWS).toBe(1);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.EXCLUDE_REMOVED_CONTENT).toBe(1);
+    expect(DEFAULT_MONETIZATION_CONDITIONS.EXCLUDE_PRIVATE_CONTENT).toBe(1);
+  });
+});
