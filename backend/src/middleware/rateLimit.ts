@@ -21,7 +21,9 @@ export const unlockLimiter = make(10 * 60_000, 20);
 export const contentLimiter = make(60 * 60_000, 60); // création de brouillons, demandes d'envoi
 export const commentLimiter = make(10 * 60_000, 30);
 export const shareLimiter = make(60 * 60_000, 60);
+export const watchLimiter = make(10 * 60_000, 120); // envoi par lots du temps de visionnage des Shorts (étape 11)
 export const searchLimiter = make(10 * 60_000, 120);
 
 export const paymentLimiter = make(10 * 60_000, 30, 'PAYMENT_RATE_LIMITED');
+export const coinSpendLimiter = make(10 * 60_000, 60, 'COINS_RATE_LIMITED'); // envois de cadeaux et pourboires
 export const webhookLimiter = make(60 * 60_000, 300, 'WEBHOOK_RATE_LIMITED');

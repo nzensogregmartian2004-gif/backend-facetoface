@@ -1,0 +1,3 @@
+import { Router } from 'express';import { authed,requireAuth } from '../../middleware/auth';import { wrap } from '../../utils/async';import { body } from '../../utils/validate';import { disputeDecisionSchema } from './disputes.schemas';import * as svc from './disputes.service';
+export const disputesRouter=Router();disputesRouter.use(requireAuth);const me=(req:Parameters<typeof authed>[0])=>authed(req).user;const id=(req:{params:Record<string,unknown>})=>String(req.params.id);
+disputesRouter.get('/',wrap(async(req,res)=>res.json(await svc.list(me(req).id))));disputesRouter.post('/:id/decision',wrap(async(req,res)=>res.json(await svc.decide(me(req).id,id(req),body(disputeDecisionSchema,req)))));

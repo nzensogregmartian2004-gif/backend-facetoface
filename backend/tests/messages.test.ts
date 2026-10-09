@@ -278,7 +278,7 @@ describe('messages payants', () => {
   const paid = async (price = 1000) => {
     const creator = await creatorSignedIn(1); const fan = await signedIn(2);
     const cid = await convId(creator, fan);
-    const sent = await send(creator, cid, { text: 'contenu secret', priceFcfa: price });
+    const sent = await send(creator, cid, { text: 'contenu secret', price: price });
     return { creator, fan, cid, id: sent.body.message.id as string, sent };
   };
   const unlock = (a: S, id: string, body: Record<string, unknown> = PAY) => api().post(`${M}/${id}/unlock`).set(a.auth).send(body);
@@ -292,33 +292,49 @@ describe('messages payants', () => {
     return { ref, purchaseId: r.body.purchase.id as string };
   };
 
+  it('accepte un prix en EUR (2 € = 200 centimes), borne les prix par devise et refuse le paiement Mobile Money hors FCFA', async () => {
+    const creator = await creatorSignedIn(1); const fan = await signedIn(2);
+    const cid = await convId(creator, fan);
+    const ok = await send(creator, cid, { text: 'x', price: 200, currency: 'EUR' });
+    expect(ok.status).toBe(201);
+    expect(ok.body.message.paid).toMatchObject({ price: 200, currency: 'EUR' });
+    expect((await send(creator, cid, { text: 'x', price: 5, currency: 'EUR' })).status).toBe(400); // sous 0,15 €
+    expect((await send(creator, cid, { text: 'x', price: 99_999, currency: 'EUR' })).status).toBe(400); // au-dessus de ~305 €
+    expect((await send(creator, cid, { text: 'x', price: 1000, currency: 'GBP' })).status).toBe(400); // devise inconnue
+    expect((await send(creator, cid, { text: 'x', currency: 'EUR' })).status).toBe(400); // devise sans prix
+    const r = await unlock(fan, ok.body.message.id as string);
+    expect(r.status).toBe(422);
+    expect(r.body.error.code).toBe('CURRENCY_NOT_PAYABLE');
+    expect(await prisma.messagePurchase.count()).toBe(0);
+  });
+
   it('réservé aux créateurs, prix dans les limites configurées', async () => {
     const creator = await creatorSignedIn(1); const fan = await signedIn(2);
     const cid = await convId(creator, fan);
-    expect((await send(fan, cid, { text: 'x', priceFcfa: 500 })).body.error.code).toBe('CREATOR_REQUIRED');
-    for (const p of [99, 200_001, 0, -5]) expect((await send(creator, cid, { text: 'x', priceFcfa: p })).status).toBe(400);
-    expect((await send(creator, cid, { text: 'x', priceFcfa: 99.5 })).status).toBe(400);
-    expect((await send(creator, cid, { text: 'x', priceFcfa: 100 })).status).toBe(201);
-    expect((await send(creator, cid, { text: 'x', priceFcfa: 200_000 })).status).toBe(201);
+    expect((await send(fan, cid, { text: 'x', price: 500 })).body.error.code).toBe('CREATOR_REQUIRED');
+    for (const p of [99, 200_001, 0, -5]) expect((await send(creator, cid, { text: 'x', price: p })).status).toBe(400);
+    expect((await send(creator, cid, { text: 'x', price: 99.5 })).status).toBe(400);
+    expect((await send(creator, cid, { text: 'x', price: 100 })).status).toBe(201);
+    expect((await send(creator, cid, { text: 'x', price: 200_000 })).status).toBe(201);
     const s = (await api().get(`${M}/settings`).set(fan.auth)).body;
-    expect(s.paidMessages).toEqual({ minFcfa: 100, maxFcfa: 200_000, commissionBps: 2000 });
+    expect(s.paidMessages).toMatchObject({ min: 100, max: 200_000, currency: 'XAF', currencies: ['XAF', 'XOF', 'EUR', 'USD'], commissionBps: 2000, byCurrency: { XAF: { min: 100, max: 200_000 }, EUR: { min: 15, max: 30_490 } } });
     expect(s.payments).toEqual({ enabled: true, operators: ['AIRTEL_MONEY', 'MOOV_MONEY'], feePayer: 'CUSTOMER' });
   });
   it('le contenu est verrouillé pour le destinataire (liste, aperçu, notification) et visible pour l’expéditeur', async () => {
     const { creator, fan, cid, id } = await paid();
     const seen = (await msgs(fan, cid)).body.items[0];
-    expect(seen).toMatchObject({ id, kind: null, text: null, media: null, paid: { priceFcfa: 1000, locked: true, purchased: false, payment: null } });
+    expect(seen).toMatchObject({ id, kind: null, text: null, media: null, paid: { price: 1000, locked: true, purchased: false, payment: null } });
     expect(JSON.stringify((await msgs(fan, cid)).body)).not.toContain('contenu secret');
     expect((await inbox(fan)).body.items[0].lastMessage.text).toBe('🔒 Message payant');
     const mine = (await msgs(creator, cid)).body.items[0];
-    expect(mine).toMatchObject({ text: 'contenu secret', paid: { priceFcfa: 1000, locked: false, purchased: false } });
+    expect(mine).toMatchObject({ text: 'contenu secret', paid: { price: 1000, locked: false, purchased: false } });
     expect((await inbox(creator)).body.items[0].lastMessage.text).toContain('contenu secret');
   });
   it('un média payant n’expose ni URL ni type avant achat ; après achat, l’URL est signée et privée (jamais le CDN public)', async () => {
     const creator = await creatorSignedIn(1); const fan = await signedIn(2);
     const cid = await convId(creator, fan);
     const k = await mediaKey(creator, cid);
-    const m = (await send(creator, cid, { mediaKey: k, priceFcfa: 500 })).body.message;
+    const m = (await send(creator, cid, { mediaKey: k, price: 500 })).body.message;
     expect(m.media.url).toBe(`memory://private/${k}`); // l'expéditeur voit le sien, par une URL privée
     const seen = (await msgs(fan, cid)).body.items[0];
     expect(seen.media).toBeNull(); expect(seen.kind).toBeNull();
@@ -341,11 +357,11 @@ describe('messages payants', () => {
     const { creator, fan, cid, id } = await paid();
     const r = await unlock(fan, id);
     expect(r.status).toBe(202);
-    expect(r.body).toMatchObject({ status: 'PENDING', purchase: { status: 'PENDING', operator: 'AIRTEL_MONEY', priceFcfa: 1000, review: false }, message: { text: null, paid: { locked: true, purchased: false, payment: { status: 'PENDING' } } } });
+    expect(r.body).toMatchObject({ status: 'PENDING', purchase: { status: 'PENDING', operator: 'AIRTEL_MONEY', price: 1000, review: false }, message: { text: null, paid: { locked: true, purchased: false, payment: { status: 'PENDING' } } } });
     expect(memPay.requests).toHaveLength(1);
-    expect(memPay.requests[0]).toMatchObject({ amountFcfa: 1000, operator: 'AIRTEL_MONEY', phone: '060123456' });
+    expect(memPay.requests[0]).toMatchObject({ amount: 1000, operator: 'AIRTEL_MONEY', phone: '060123456' });
     let row = await prisma.messagePurchase.findFirstOrThrow();
-    expect(row).toMatchObject({ status: 'PENDING', buyerId: fan.user.id, sellerId: creator.user.id, grossFcfa: 1000, commissionFcfa: 200, creatorFcfa: 800, commissionBps: 2000, operator: 'AIRTEL_MONEY', payerPhoneHint: '3456', attempts: 1 });
+    expect(row).toMatchObject({ status: 'PENDING', buyerId: fan.user.id, sellerId: creator.user.id, grossAmount: 1000, commissionAmount: 200, creatorAmount: 800, commissionBps: 2000, operator: 'AIRTEL_MONEY', payerPhoneHint: '3456', attempts: 1 });
     expect(row.reference).toMatch(/^M[0-9A-Z]{12}$/); expect(row.reference!.length).toBeLessThanOrEqual(13);
     expect(row.externalRef).toBe(`mem_${row.reference}`);
     expect(JSON.stringify(row)).not.toContain('060123456'); // le numéro complet n'est jamais conservé
@@ -361,13 +377,13 @@ describe('messages payants', () => {
     expect(w.body).toEqual({ transactionId: `tx_${row.reference}`, responseCode: 200 }); // écho exigé par MyPVit
     row = await prisma.messagePurchase.findFirstOrThrow();
     expect(row).toMatchObject({ status: 'PAID', method: 'AIRTEL_MONEY', externalRef: `tx_${row.reference}` });
-    expect(row.paidAt).toBeTruthy(); expect(row.commissionFcfa + row.creatorFcfa).toBe(row.grossFcfa);
+    expect(row.paidAt).toBeTruthy(); expect(row.commissionAmount + row.creatorAmount).toBe(row.grossAmount);
     const done = await api().get(`${M}/purchases/${row.id}`).set(fan.auth);
     expect(done.body).toMatchObject({ purchase: { status: 'PAID' }, message: { text: 'contenu secret', paid: { locked: false, purchased: true } } });
     expect((await msgs(fan, cid)).body.items[0]).toMatchObject({ text: 'contenu secret', paid: { locked: false, purchased: true, payment: null } });
     expect((await msgs(creator, cid)).body.items[0].paid.purchased).toBe(true);
     expect((await inbox(fan)).body.items[0].lastMessage.text).toBe('contenu secret');
-    expect((await notifs(creator)).body.items.find((x: any) => x.type === 'MESSAGE_PURCHASED')).toMatchObject({ amountFcfa: 800, actor: { username: fan.user.username } });
+    expect((await notifs(creator)).body.items.find((x: any) => x.type === 'MESSAGE_PURCHASED')).toMatchObject({ amount: 800, actor: { username: fan.user.username } });
     // Second déblocage et rejeu du webhook : aucun nouveau débit, aucune seconde notification.
     const again = await unlock(fan, id);
     expect(again.status).toBe(200); expect(again.body).toMatchObject({ status: 'PAID', alreadyPurchased: true });
@@ -378,7 +394,7 @@ describe('messages payants', () => {
   it('commission d’un montant non rond : somme exacte', async () => {
     const { fan, id } = await paid(333);
     await buy(fan, id);
-    expect(await prisma.messagePurchase.findFirstOrThrow()).toMatchObject({ grossFcfa: 333, commissionFcfa: 67, creatorFcfa: 266 });
+    expect(await prisma.messagePurchase.findFirstOrThrow()).toMatchObject({ grossAmount: 333, commissionAmount: 67, creatorAmount: 266 });
   });
   it('un opérateur Moov est transmis tel quel', async () => {
     const { fan, id } = await paid();
@@ -502,7 +518,7 @@ describe('messages payants', () => {
     expect((await unlock(fan, 'inconnu')).status).toBe(404);
     const free = await say(creator, cid, 'gratuit');
     expect((await unlock(fan, free.id)).status).toBe(404);
-    const gone = (await send(creator, cid, { text: 'x', priceFcfa: 200 })).body.message;
+    const gone = (await send(creator, cid, { text: 'x', price: 200 })).body.message;
     await api().delete(`${M}/${gone.id}`).set(creator.auth);
     expect((await unlock(fan, gone.id)).status).toBe(404);
     await block(creator, fan);
@@ -521,7 +537,7 @@ describe('messages payants', () => {
   });
   it('un message payant dont l’achat est PAID, PENDING ou REVIEW ne peut plus être supprimé ; sans achat, si', async () => {
     const { creator, fan, id, cid } = await paid();
-    const free = (await send(creator, cid, { text: 'autre', priceFcfa: 300 })).body.message;
+    const free = (await send(creator, cid, { text: 'autre', price: 300 })).body.message;
     expect((await api().delete(`${M}/${free.id}`).set(creator.auth)).status).toBe(204);
     await unlock(fan, id); // PENDING
     let r = await api().delete(`${M}/${id}`).set(creator.auth);
@@ -545,7 +561,7 @@ describe('messages payants', () => {
     const creator = await creatorSignedIn(1); const fan = await signedIn(2);
     const cid = await convId(creator, fan);
     const k = await mediaKey(creator, cid);
-    const m = (await send(creator, cid, { mediaKey: k, priceFcfa: 500 })).body.message;
+    const m = (await send(creator, cid, { mediaKey: k, price: 500 })).body.message;
     await buy(fan, m.id);
     const del = await api().delete('/api/users/me').set(creator.auth).send({ password: 'Passw0rdOK' });
     expect(del.status).toBe(204);

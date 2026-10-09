@@ -60,4 +60,12 @@ export const CONFIG_DEFAULTS: ConfigDefault[] = [
   { key: 'FEATURE_PRICING.PAID_MESSAGE_MIN', value: 100, type: 'INTEGER', category: 'FEATURE_PRICING', description: 'Prix minimum d’un message payant.' },
   { key: 'FEATURE_PRICING.CUSTOM_VIDEO_MIN', value: 1000, type: 'INTEGER', category: 'FEATURE_PRICING', description: 'Prix minimum d’une vidéo personnalisée.' },
   { key: 'PROMOTIONS.ENABLED', value: true, type: 'BOOLEAN', category: 'PROMOTIONS', description: 'Active les promotions administratives.' },
+  { key: 'COINS.COMMISSION_BPS', value: 2000, type: 'INTEGER', category: 'COMMISSION', description: 'Commission plateforme sur les cadeaux et pourboires en coins, en points de base (2000 = 20 %).' },
+  { key: 'MESSAGING.VIEW_ONCE_ENABLED', value: true, type: 'BOOLEAN', category: 'GENERAL', description: 'Active ou désactive les messages à vue unique dans les conversations privées.' },
+  { key: 'MESSAGING.VIEW_ONCE_PAID_ALLOWED', value: true, type: 'BOOLEAN', category: 'GENERAL', description: 'Autorise les photos et vidéos à vue unique payantes (même règle de prix et de commission que les messages payants).' },
+  { key: 'GROUP_ACCESS.COMMISSION_BPS', value: 2000, type: 'INTEGER', category: 'COMMISSION', description: 'Commission plateforme sur l’accès payant aux groupes, en points de base (2000 = 20 %). Figée à chaque achat.' },
+  { key: 'STORIES.ENABLED', value: true, type: 'BOOLEAN', category: 'GENERAL', description: 'Active ou désactive les stories (publication et affichage).' },
+  { key: 'STORIES.DEFAULT_HOURS', value: 24, type: 'INTEGER', category: 'GENERAL', description: 'Durée de vie par défaut d’une story, en heures.' },
+  { key: 'STORIES.MAX_HOURS', value: 72, type: 'INTEGER', category: 'GENERAL', description: 'Durée de vie maximale qu’un auteur peut choisir pour une story, en heures.' },
+  { key: 'AUDIENCE.MIN_GROUP_SIZE', value: 5, type: 'INTEGER', category: 'GENERAL', description: 'Nombre minimum d’abonnés d’un pays pour qu’il apparaisse séparément dans l’audience du créateur ; en dessous, il est regroupé dans « Autres ».' },
 ];

@@ -1,3 +1,4 @@
+import { currencyForCountry } from '../geo/geo.service';
 import bcrypt from 'bcryptjs';
 import type { Request } from 'express';
 import { Prisma, type User } from '@prisma/client';
@@ -12,7 +13,7 @@ import { consumeCode, issueCode } from './codes';
 const dummyHash = bcrypt.hashSync('mot-de-passe-factice-pour-egaliser-le-temps', env.BCRYPT_COST);
 const refreshExpiry = () => new Date(Date.now() + env.REFRESH_TOKEN_TTL_DAYS * 86_400_000);
 
-export type RegisterInput = { email: string; username: string; password: string; displayName: string; birthDate: string };
+export type RegisterInput = { email: string; username: string; password: string; displayName: string; birthDate: string; country?: string };
 
 const tokenBundle = (userId: string, sessionId: string, secret: string) => ({
   accessToken: signAccessToken({ sub: userId, sid: sessionId }),
@@ -45,6 +46,8 @@ export async function register(input: RegisterInput, req: Request) {
         username: input.username,
         displayName: input.displayName,
         birthDate: new Date(`${input.birthDate}T00:00:00Z`),
+        country: input.country ?? null,
+        preferredCurrency: currencyForCountry(input.country) ?? undefined,
         passwordHash: await bcrypt.hash(input.password, env.BCRYPT_COST),
       },
     });
@@ -124,7 +127,7 @@ export async function resetPassword(email: string, code: string, newPassword: st
   await consumeCode(user.id, 'PASSWORD_RESET', code);
   await prisma.user.update({
     where: { id: user.id },
-    data: { passwordHash: await bcrypt.hash(newPassword, env.BCRYPT_COST), passwordChangedAt: new Date(), failedLoginCount: 0, lockedUntil: null, emailVerifiedAt: user.emailVerifiedAt ?? new Date() },
+    data: { passwordHash: await bcrypt.hash(newPassword, env.BCRYPT_COST), passwordChangedAt: new Date(), mustChangePassword: false, failedLoginCount: 0, lockedUntil: null, emailVerifiedAt: user.emailVerifiedAt ?? new Date() },
   });
   await revokeAll(user.id);
 }
@@ -132,7 +135,7 @@ export async function resetPassword(email: string, code: string, newPassword: st
 export async function changePassword(user: User, sessionId: string, currentPassword: string, newPassword: string) {
   if (!(await bcrypt.compare(currentPassword, user.passwordHash))) throw badRequest('WRONG_PASSWORD', 'Mot de passe actuel incorrect', { currentPassword: 'Incorrect' });
   if (currentPassword === newPassword) throw badRequest('SAME_PASSWORD', 'Le nouveau mot de passe doit être différent', { newPassword: 'Identique à l’actuel' });
-  await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await bcrypt.hash(newPassword, env.BCRYPT_COST), passwordChangedAt: new Date() } });
+  await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await bcrypt.hash(newPassword, env.BCRYPT_COST), passwordChangedAt: new Date(), mustChangePassword: false } });
   await revokeAll(user.id, sessionId);
 }
 

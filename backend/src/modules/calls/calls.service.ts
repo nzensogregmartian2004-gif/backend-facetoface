@@ -1,3 +1,4 @@
+import { assertMobileMoneyCurrency, DEFAULT_CURRENCY, formatAmountText, limitIn, SUPPORTED_CURRENCIES } from '../../utils/currency';
 import { randomBytes } from 'node:crypto';
 import type { Call, CreatorCallSettings, Prisma, User } from '@prisma/client';
 import { prisma } from '../../config/db';
@@ -26,7 +27,12 @@ export const settings = () => {
     enabled: callProvider.configured() && operators.length > 0,
     provider: callProvider.name,
     payments: { enabled: operators.length > 0, operators, feePayer: env.PAYMENT_FEE_PAYER },
-    limits: { minPriceFcfa: env.CALL_MIN_PRICE_FCFA, maxPriceFcfa: env.CALL_MAX_PRICE_FCFA, maxTotalFcfa: env.CALL_MAX_TOTAL_FCFA, maxDurationMinutes: env.CALL_MAX_DURATION_MINUTES },
+    currencies: SUPPORTED_CURRENCIES,
+    /** Bornes par devise, en unités mineures (le mobile valide la saisie avec elles). */
+    limits: {
+      maxDurationMinutes: env.CALL_MAX_DURATION_MINUTES,
+      byCurrency: Object.fromEntries(SUPPORTED_CURRENCIES.map((c) => [c, { minPrice: limitIn(env.CALL_MIN_PRICE_FCFA, c), maxPrice: limitIn(env.CALL_MAX_PRICE_FCFA, c), maxTotal: limitIn(env.CALL_MAX_TOTAL_FCFA, c) }])),
+    },
     ringSeconds: env.CALL_RING_SECONDS,
     minBillableSeconds: env.CALL_MIN_BILLABLE_SECONDS,
     commissionBps: env.CALL_COMMISSION_BPS,
@@ -37,8 +43,9 @@ export const settings = () => {
 // ── Réglages du créateur ─────────────────────────────────────────
 const settingsDto = (s: CreatorCallSettings | null) => ({
   pricingMode: s?.pricingMode ?? 'PER_MINUTE',
-  audioPriceFcfa: s?.audioPriceFcfa ?? null,
-  videoPriceFcfa: s?.videoPriceFcfa ?? null,
+  currency: s?.currency ?? DEFAULT_CURRENCY,
+  audioPrice: s?.audioPrice ?? null,
+  videoPrice: s?.videoPrice ?? null,
   maxDurationMinutes: Math.min(s?.maxDurationMinutes ?? 30, env.CALL_MAX_DURATION_MINUTES),
   access: s?.access ?? 'EVERYONE',
   isAvailable: s?.isAvailable ?? false,
@@ -53,18 +60,21 @@ export async function getMySettings(viewer: User) {
   return { settings: settingsDto(await prisma.creatorCallSettings.findUnique({ where: { userId: viewer.id } })) };
 }
 
-export async function updateMySettings(viewer: User, input: { pricingMode?: 'PER_MINUTE' | 'PER_SESSION'; audioPriceFcfa?: number | null; videoPriceFcfa?: number | null; maxDurationMinutes?: number; access?: 'EVERYONE' | 'FOLLOWERS' | 'SUBSCRIBERS'; isAvailable?: boolean }) {
+export async function updateMySettings(viewer: User, input: { pricingMode?: 'PER_MINUTE' | 'PER_SESSION'; currency?: string; audioPrice?: number | null; videoPrice?: number | null; maxDurationMinutes?: number; access?: 'EVERYONE' | 'FOLLOWERS' | 'SUBSCRIBERS'; isAvailable?: boolean }) {
   requireCreator(viewer);
   const current = settingsDto(await prisma.creatorCallSettings.findUnique({ where: { userId: viewer.id } }));
-  const next = { ...current, ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) } as typeof current;
-  const priceError = (v: number | null | undefined) => (v != null && (v < env.CALL_MIN_PRICE_FCFA || v > env.CALL_MAX_PRICE_FCFA) ? `Entre ${env.CALL_MIN_PRICE_FCFA} et ${env.CALL_MAX_PRICE_FCFA} FCFA` : null);
+  const currencyChanged = input.currency !== undefined && input.currency !== current.currency;
+  // Un prix est exprimé en unités mineures d'UNE devise : changer de devise sans redonner de prix le réinitialiserait de façon trompeuse.
+  const base = currencyChanged ? { ...current, audioPrice: null, videoPrice: null } : current;
+  const next = { ...base, ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) } as typeof current;
   const details: Record<string, string> = {};
-  const a = priceError(input.audioPriceFcfa); if (a) details.audioPriceFcfa = a;
-  const v = priceError(input.videoPriceFcfa); if (v) details.videoPriceFcfa = v;
+  const priceError = (v: number | null | undefined) => (v != null && (v < limitIn(env.CALL_MIN_PRICE_FCFA, next.currency) || v > limitIn(env.CALL_MAX_PRICE_FCFA, next.currency)) ? `Entre ${formatAmountText(limitIn(env.CALL_MIN_PRICE_FCFA, next.currency), next.currency)} et ${formatAmountText(limitIn(env.CALL_MAX_PRICE_FCFA, next.currency), next.currency)}` : null);
+  const a = priceError(next.audioPrice); if (a) details.audioPrice = a;
+  const v = priceError(next.videoPrice); if (v) details.videoPrice = v;
   if (input.maxDurationMinutes !== undefined && input.maxDurationMinutes > env.CALL_MAX_DURATION_MINUTES) details.maxDurationMinutes = `${env.CALL_MAX_DURATION_MINUTES} minutes maximum`;
   if (Object.keys(details).length) throw badRequest('INVALID_CALL_SETTINGS', 'Réglages invalides', details);
-  if (next.isAvailable && next.audioPriceFcfa == null && next.videoPriceFcfa == null) throw badRequest('NO_CALL_PRICE', 'Fixez un prix (audio ou vidéo) avant de vous rendre disponible', { isAvailable: 'Aucun prix défini' });
-  const data = { pricingMode: next.pricingMode, audioPriceFcfa: next.audioPriceFcfa, videoPriceFcfa: next.videoPriceFcfa, maxDurationMinutes: next.maxDurationMinutes, access: next.access, isAvailable: next.isAvailable };
+  if (next.isAvailable && next.audioPrice == null && next.videoPrice == null) throw badRequest('NO_CALL_PRICE', 'Fixez un prix (audio ou vidéo) avant de vous rendre disponible', { isAvailable: 'Aucun prix défini' });
+  const data = { pricingMode: next.pricingMode, currency: next.currency, audioPrice: next.audioPrice, videoPrice: next.videoPrice, maxDurationMinutes: next.maxDurationMinutes, access: next.access, isAvailable: next.isAvailable };
   const saved = await prisma.creatorCallSettings.upsert({ where: { userId: viewer.id }, create: { userId: viewer.id, ...data }, update: data });
   return { settings: settingsDto(saved) };
 }
@@ -86,7 +96,7 @@ type Eligibility = { allowed: true; settings: CreatorCallSettings } | { allowed:
 async function eligibility(viewer: User, callee: User, type: 'AUDIO' | 'VIDEO' | null): Promise<Eligibility> {
   const s = await prisma.creatorCallSettings.findUnique({ where: { userId: callee.id } });
   if (!s || !s.isAvailable) return { allowed: false, code: 'CREATOR_UNAVAILABLE', message: "Ce créateur n'est pas disponible pour des appels" };
-  if (type && (type === 'AUDIO' ? s.audioPriceFcfa : s.videoPriceFcfa) == null) return { allowed: false, code: 'CALL_TYPE_UNAVAILABLE', message: type === 'AUDIO' ? "Ce créateur ne propose pas d'appel audio" : "Ce créateur ne propose pas d'appel vidéo" };
+  if (type && (type === 'AUDIO' ? s.audioPrice : s.videoPrice) == null) return { allowed: false, code: 'CALL_TYPE_UNAVAILABLE', message: type === 'AUDIO' ? "Ce créateur ne propose pas d'appel audio" : "Ce créateur ne propose pas d'appel vidéo" };
   if (s.access === 'FOLLOWERS') {
     const follows = await prisma.follow.findUnique({ where: { followerId_followingId: { followerId: viewer.id, followingId: callee.id } }, select: { id: true } });
     if (!follows) return { allowed: false, code: 'CALL_FOLLOWERS_ONLY', message: 'Suivez ce créateur pour pouvoir l’appeler' };
@@ -110,7 +120,7 @@ export async function getOffer(viewer: User, calleeId: string) {
   const busy = await creatorBusy(prisma, callee.id);
   const d = settingsDto(e.settings);
   const reason = !s.enabled ? { code: 'CALLS_NOT_CONFIGURED', message: 'Les appels ne sont pas encore disponibles' } : busy ? { code: 'CREATOR_BUSY', message: 'Ce créateur est en ligne avec quelqu’un d’autre' } : null;
-  return { offer: { pricingMode: d.pricingMode, audioPriceFcfa: d.audioPriceFcfa, videoPriceFcfa: d.videoPriceFcfa, maxDurationMinutes: d.maxDurationMinutes, access: d.access, busy }, canCall: !reason, reason };
+  return { offer: { pricingMode: d.pricingMode, currency: d.currency, audioPrice: d.audioPrice, videoPrice: d.videoPrice, maxDurationMinutes: d.maxDurationMinutes, access: d.access, busy }, canCall: !reason, reason };
 }
 
 // ── Chargement / sérialisation ──────────────────────────────────
@@ -133,7 +143,7 @@ async function loadParticipant(viewer: User, id: string): Promise<Call> {
 async function closeUnanswered(c: Call, status: 'MISSED' | 'DECLINED' | 'CANCELLED', reason: 'RING_TIMEOUT' | 'DECLINED' | 'CANCELLED', at: Date): Promise<boolean> {
   const r = await prisma.call.updateMany({
     where: { id: c.id, status: 'RINGING' },
-    data: { status, endReason: reason, endedAt: at, ringExpiresAt: null, consumedFcfa: 0, commissionFcfa: 0, creatorFcfa: 0, refundFcfa: c.grossFcfa, refundStatus: 'DUE' },
+    data: { status, endReason: reason, endedAt: at, ringExpiresAt: null, consumedAmount: 0, commissionAmount: 0, creatorAmount: 0, refundAmount: c.grossAmount, refundStatus: 'DUE' },
   });
   return r.count === 1;
 }
@@ -147,10 +157,10 @@ async function endActive(c: Call, at: Date, reason: 'HANGUP' | 'MAX_DURATION'): 
   const r = await prisma.$transaction(async (tx) => {
     const u = await tx.call.updateMany({
       where: { id: c.id, status: 'ACTIVE' },
-      data: { status: 'ENDED', endReason: reason, endedAt: at, actualSeconds: actual, consumedFcfa: bill.consumedFcfa, commissionFcfa: bill.commissionFcfa, creatorFcfa: bill.creatorFcfa, refundFcfa: bill.refundFcfa, refundStatus: bill.refundFcfa > 0 ? 'DUE' : 'NONE' },
+      data: { status: 'ENDED', endReason: reason, endedAt: at, actualSeconds: actual, consumedAmount: bill.consumedAmount, commissionAmount: bill.commissionAmount, creatorAmount: bill.creatorAmount, refundAmount: bill.refundAmount, refundStatus: bill.refundAmount > 0 ? 'DUE' : 'NONE' },
     });
-    if (u.count === 1 && bill.creatorFcfa > 0) {
-      await recordPaidCallEarning(tx, { id: c.id, calleeId: c.calleeId, consumedFcfa: bill.consumedFcfa, commissionFcfa: bill.commissionFcfa, creatorFcfa: bill.creatorFcfa, commissionBps: c.commissionBps });
+    if (u.count === 1 && bill.creatorAmount > 0) {
+      await recordPaidCallEarning(tx, { id: c.id, calleeId: c.calleeId, consumedAmount: bill.consumedAmount, commissionAmount: bill.commissionAmount, creatorAmount: bill.creatorAmount, commissionBps: c.commissionBps, currency: c.currency });
     }
     return u;
   });
@@ -203,18 +213,19 @@ export function startCallSweeper(): NodeJS.Timeout | null {
 export async function requestCall(viewer: User, input: { calleeId: string; type: 'AUDIO' | 'VIDEO'; minutes?: number; operator: MobileOperator; phone: string }) {
   const callee = await loadCallee(viewer, input.calleeId);
   if (!callProvider.configured()) throw new AppError(503, 'CALLS_NOT_CONFIGURED', "Les appels ne sont pas encore configurés sur ce serveur");
-  if (!payments.operators().includes(input.operator)) {
-    if (payments.operators().length === 0) throw new AppError(503, 'PAYMENTS_NOT_CONFIGURED', 'Les paiements ne sont pas encore configurés sur ce serveur');
+  if (!payments.operators(viewer.country).includes(input.operator)) {
+    if (payments.operators(viewer.country).length === 0) throw new AppError(503, 'PAYMENTS_NOT_CONFIGURED', 'Les paiements ne sont pas encore configurés sur ce serveur');
     throw badRequest('OPERATOR_UNAVAILABLE', "Cet opérateur n'est pas disponible", { operator: 'Opérateur indisponible' });
   }
   const e = await eligibility(viewer, callee, input.type);
   if (!e.allowed) throw forbidden(e.code, e.message);
   const s = settingsDto(e.settings);
-  const unitPriceFcfa = (input.type === 'AUDIO' ? s.audioPriceFcfa : s.videoPriceFcfa)!;
+  assertMobileMoneyCurrency(s.currency);
+  const unitPrice = (input.type === 'AUDIO' ? s.audioPrice : s.videoPrice)!;
   const requestedMinutes = s.pricingMode === 'PER_MINUTE' ? input.minutes ?? Math.min(5, s.maxDurationMinutes) : s.maxDurationMinutes;
   if (requestedMinutes > s.maxDurationMinutes) throw badRequest('INVALID_MINUTES', `Durée maximale : ${s.maxDurationMinutes} minutes`, { minutes: `${s.maxDurationMinutes} minutes maximum` });
-  const grossFcfa = prepaidAmount(s.pricingMode, unitPriceFcfa, requestedMinutes);
-  if (grossFcfa > env.CALL_MAX_TOTAL_FCFA) throw badRequest('AMOUNT_TOO_HIGH', `Montant maximal d'un appel : ${env.CALL_MAX_TOTAL_FCFA} FCFA`, { minutes: 'Réduisez la durée' });
+  const grossAmount = prepaidAmount(s.pricingMode, unitPrice, requestedMinutes);
+  if (grossAmount > limitIn(env.CALL_MAX_TOTAL_FCFA, s.currency)) throw badRequest('AMOUNT_TOO_HIGH', `Montant maximal d'un appel : ${formatAmountText(limitIn(env.CALL_MAX_TOTAL_FCFA, s.currency), s.currency)}`, { minutes: 'Réduisez la durée' });
 
   const reference = newReference();
   const created = await prisma.$transaction(async (tx) => {
@@ -224,14 +235,14 @@ export async function requestCall(viewer: User, input: { calleeId: string; type:
     if (mine) throw conflict('CALL_IN_PROGRESS', 'Vous avez déjà un appel en cours', { callId: mine.id });
     if (await creatorBusy(tx, callee.id)) throw conflict('CREATOR_BUSY', 'Ce créateur est en ligne avec quelqu’un d’autre, réessayez dans un instant');
     return tx.call.create({
-      data: { callerId: viewer.id, calleeId: callee.id, type: input.type, pricingMode: s.pricingMode, unitPriceFcfa, requestedMinutes, grossFcfa, commissionBps: env.CALL_COMMISSION_BPS, reference, operator: input.operator, payerPhoneHint: input.phone.slice(-4) },
+      data: { callerId: viewer.id, calleeId: callee.id, type: input.type, pricingMode: s.pricingMode, currency: s.currency, unitPrice, requestedMinutes, grossAmount, commissionBps: env.CALL_COMMISSION_BPS, reference, operator: input.operator, payerPhoneHint: input.phone.slice(-4) },
     });
-  });
+  }, { maxWait: 10_000, timeout: 20_000 }); // transaction courte, mais sur un disque lent (antivirus, point de contrôle) elle peut dépasser le délai par défaut de 5 s
 
   const fail = () => prisma.call.updateMany({ where: { id: created.id, paymentStatus: 'PENDING' }, data: { paymentStatus: 'FAILED', status: 'PAYMENT_FAILED' } });
   let res;
   try {
-    res = await payments.initiate({ reference, amountFcfa: grossFcfa, operator: input.operator, phone: input.phone, description: 'Appel Face to Face' });
+    res = await payments.initiate({ reference, amount: grossAmount, currency: s.currency, operator: input.operator, phone: input.phone, description: 'Appel Face to Face' });
   } catch (err) { // rien n'est parti chez le prestataire : échec définitif, nouvelle demande possible
     await fail();
     throw err;
@@ -346,7 +357,7 @@ export async function callToken(viewer: User, id: string) {
 export async function disputeCall(viewer: User, id: string, reason: string) {
   const c = await loadParticipant(viewer, id);
   if (c.callerId !== viewer.id) throw notFound('Appel introuvable');
-  if (c.status !== 'ENDED' || !c.endedAt || (c.consumedFcfa ?? 0) <= 0) throw notPossible('CALL_NOT_DISPUTABLE', "Seul un appel terminé et facturé peut faire l'objet d'un litige");
+  if (c.status !== 'ENDED' || !c.endedAt || (c.consumedAmount ?? 0) <= 0) throw notPossible('CALL_NOT_DISPUTABLE', "Seul un appel terminé et facturé peut faire l'objet d'un litige");
   if (Date.now() - c.endedAt.getTime() > env.CALL_DISPUTE_DAYS * 86_400_000) throw notPossible('DISPUTE_WINDOW_CLOSED', `Le délai de ${env.CALL_DISPUTE_DAYS} jours pour contester cet appel est dépassé`);
   const r = await prisma.call.updateMany({ where: { id: c.id, disputedAt: null }, data: { disputedAt: new Date(), disputeReason: reason } });
   if (r.count !== 1) throw notPossible('ALREADY_DISPUTED', 'Un litige est déjà ouvert pour cet appel');

@@ -1,9 +1,10 @@
-import type { Prisma, User } from '@prisma/client';
+import type { CreatorEarningSource, Prisma, User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { env } from '../../config/env';
 import { splitAmount } from '../../utils/money';
 import { forbidden } from '../../utils/errors';
 import { DEFAULT_CURRENCY, listCurrencies, normalizeCurrency } from './currency';
+import { SUPPORTED_CURRENCIES } from '../../utils/currency';
 import { creditCreatorWallet } from '../wallet/wallet.service';
 import { getCurrentRuleVersion } from '../config/config.service';
 
@@ -11,7 +12,7 @@ const commissionBps = () => env.PAID_MESSAGE_COMMISSION_BPS ?? 2000;
 
 export type EarningRecordInput = {
   creatorId: string;
-  source: 'PAID_MESSAGE' | 'PAID_CALL' | 'VIDEO' | 'SHORT' | 'LIVE' | 'CREATOR_SUBSCRIPTION' | 'PAID_CONTENT' | 'CUSTOM_VIDEO' | 'GIFT' | 'TIP' | 'CREATOR_POOL' | 'OTHER';
+  source: CreatorEarningSource;
   sourceId: string;
   grossAmount: number;
   currency: string;
@@ -50,19 +51,19 @@ export async function recordCreatorEarning(db: Prisma.TransactionClient | typeof
   return earning;
 }
 
-export async function recordPaidMessageEarning(db: Prisma.TransactionClient | typeof prisma, purchase: { id: string; sellerId: string; grossFcfa: number; commissionBps: number }) {
+export async function recordPaidMessageEarning(db: Prisma.TransactionClient | typeof prisma, purchase: { id: string; sellerId: string; grossAmount: number; commissionBps: number; currency?: string }) {
   return recordCreatorEarning(db, {
     creatorId: purchase.sellerId,
     source: 'PAID_MESSAGE',
     sourceId: purchase.id,
-    grossAmount: purchase.grossFcfa,
-    currency: DEFAULT_CURRENCY,
+    grossAmount: purchase.grossAmount,
+    currency: purchase.currency ?? DEFAULT_CURRENCY,
     commissionBps: purchase.commissionBps,
     status: 'AVAILABLE',
   });
 }
 
-export async function recordPaidCallEarning(db: Prisma.TransactionClient | typeof prisma, call: { id: string; calleeId: string; consumedFcfa: number; commissionFcfa: number; creatorFcfa: number; commissionBps: number }) {
+export async function recordPaidCallEarning(db: Prisma.TransactionClient | typeof prisma, call: { id: string; calleeId: string; consumedAmount: number; commissionAmount: number; creatorAmount: number; commissionBps: number; currency?: string }) {
   const ruleVersion = await getCurrentRuleVersion(db);
   const earning = await db.creatorEarning.upsert({
     where: { source_sourceId: { source: 'PAID_CALL', sourceId: call.id } },
@@ -70,10 +71,10 @@ export async function recordPaidCallEarning(db: Prisma.TransactionClient | typeo
       creatorId: call.calleeId,
       source: 'PAID_CALL',
       sourceId: call.id,
-      grossAmount: call.consumedFcfa,
-      platformFeeAmount: call.commissionFcfa,
-      creatorAmount: call.creatorFcfa,
-      currency: DEFAULT_CURRENCY,
+      grossAmount: call.consumedAmount,
+      platformFeeAmount: call.commissionAmount,
+      creatorAmount: call.creatorAmount,
+      currency: call.currency ?? DEFAULT_CURRENCY,
       commissionBps: call.commissionBps,
       status: 'AVAILABLE',
       ruleVersion,
@@ -83,7 +84,7 @@ export async function recordPaidCallEarning(db: Prisma.TransactionClient | typeo
   });
   await creditCreatorWallet(db, { creatorId: earning.creatorId, sourceType: 'CREATOR_EARNING', sourceId: earning.id, amount: earning.creatorAmount, currency: earning.currency, description: 'Revenu PAID_CALL' });
   if (earning.creatorAmount > 0) {
-    await db.financialTransaction.updateMany({ where: { sourceType: 'PAID_CALL', sourceId: call.id }, data: { creatorAmount: earning.creatorAmount, platformFeeAmount: call.commissionFcfa, grossAmount: call.consumedFcfa, status: 'COMPLETED', completedAt: new Date() } });
+    await db.financialTransaction.updateMany({ where: { sourceType: 'PAID_CALL', sourceId: call.id }, data: { creatorAmount: earning.creatorAmount, platformFeeAmount: call.commissionAmount, grossAmount: call.consumedAmount, status: 'COMPLETED', completedAt: new Date() } });
   }
   return earning;
 }
@@ -115,5 +116,5 @@ export async function getCreatorBreakdown(viewer: User, currency?: string) {
 export async function publicMonetizationSettings() {
   const { getViewMonetizationSettings } = await import('./views.service.js');
   const viewSettings = await getViewMonetizationSettings();
-  return { defaultLanguage: 'fr', supportedLanguages: ['fr', 'en'], defaultCurrency: DEFAULT_CURRENCY, currencies: listCurrencies(), directCommissionBps: commissionBps(), viewMonetization: viewSettings };
+  return { defaultLanguage: 'fr', supportedLanguages: ['fr', 'en'], defaultCurrency: DEFAULT_CURRENCY, currencies: listCurrencies(), /** Devises dans lesquelles un prix peut être fixé et payé (messages, appels, abonnements, vidéos personnalisées…). */ priceCurrencies: [...SUPPORTED_CURRENCIES], directCommissionBps: commissionBps(), viewMonetization: viewSettings };
 }

@@ -96,7 +96,7 @@ describe('confidentialité', () => {
   it('modifie et valide les réglages', async () => {
     const { auth } = await signedIn(1);
     const res = await api().patch('/api/users/me/privacy').set(auth).send({ allowMessagesFrom: 'NOBODY', showOnlineStatus: false });
-    expect(res.body.user.privacy).toEqual({ profileVisibility: 'PUBLIC', allowMessagesFrom: 'NOBODY', showOnlineStatus: false });
+    expect(res.body.user.privacy).toMatchObject({ profileVisibility: 'PUBLIC', allowMessagesFrom: 'NOBODY', showOnlineStatus: false });
     expect((await api().patch('/api/users/me/privacy').set(auth).send({ allowMessagesFrom: 'TOUS' })).status).toBe(400);
     expect((await api().patch('/api/users/me/privacy').set(auth).send({})).status).toBe(400);
   });

@@ -15,7 +15,7 @@ const setSettings = (creator: S, body: Record<string, unknown>) => api().put(`${
 /** Créateur prêt à recevoir des appels : 500 FCFA/min en audio, 1 000 en vidéo, 30 min maximum. */
 async function openCreator(n = 1, over: Record<string, unknown> = {}) {
   const c = await creatorSignedIn(n);
-  const r = await setSettings(c, { pricingMode: 'PER_MINUTE', audioPriceFcfa: 500, videoPriceFcfa: 1000, maxDurationMinutes: 30, access: 'EVERYONE', isAvailable: true, ...over });
+  const r = await setSettings(c, { pricingMode: 'PER_MINUTE', audioPrice: 500, videoPrice: 1000, maxDurationMinutes: 30, access: 'EVERYONE', isAvailable: true, ...over });
   if (r.status !== 200) throw new Error(JSON.stringify(r.body));
   return c;
 }
@@ -44,6 +44,22 @@ async function active(caller: S, creator: S, body: Record<string, unknown> = {})
 }
 
 describe('réglages d’appel du créateur', () => {
+  it('accepte un prix en USD (10 $/min = 1000), le renvoie avec sa devise et refuse la demande en Mobile Money', async () => {
+    const creator = await openCreator(1, { currency: 'USD', audioPrice: 1000, videoPrice: 2000 });
+    const mine = await api().get(`${C}/me/settings`).set(creator.auth);
+    expect(mine.body.settings).toMatchObject({ currency: 'USD', audioPrice: 1000, videoPrice: 2000 });
+    const caller = await signedIn(2);
+    const r = await request(caller, creator);
+    expect(r.status).toBe(422);
+    expect(r.body.error.code).toBe('CURRENCY_NOT_PAYABLE');
+    expect(await prisma.call.count()).toBe(0);
+  });
+  it('changer de devise sans redonner de prix réinitialise les anciens prix', async () => {
+    const creator = await openCreator(1);
+    const r = await setSettings(creator, { currency: 'EUR', isAvailable: false });
+    expect(r.status).toBe(200);
+    expect(r.body.settings).toMatchObject({ currency: 'EUR', audioPrice: null, videoPrice: null });
+  });
   it('seul un créateur peut les lire et les modifier (403 sinon)', async () => {
     const u = await signedIn(1);
     expect((await api().get(`${C}/me/settings`).set(u.auth)).status).toBe(403);
@@ -53,16 +69,16 @@ describe('réglages d’appel du créateur', () => {
   it('valeurs par défaut : indisponible, aucun prix ; mise à jour partielle conservée', async () => {
     const c = await creatorSignedIn(1);
     const g = await api().get(`${C}/me/settings`).set(c.auth);
-    expect(g.body.settings).toMatchObject({ pricingMode: 'PER_MINUTE', audioPriceFcfa: null, videoPriceFcfa: null, isAvailable: false, access: 'EVERYONE' });
-    expect((await setSettings(c, { audioPriceFcfa: 700 })).body.settings).toMatchObject({ audioPriceFcfa: 700, videoPriceFcfa: null, isAvailable: false });
-    expect((await setSettings(c, { isAvailable: true })).body.settings).toMatchObject({ audioPriceFcfa: 700, isAvailable: true });
-    expect((await setSettings(c, { videoPriceFcfa: null })).body.settings).toMatchObject({ audioPriceFcfa: 700, videoPriceFcfa: null });
+    expect(g.body.settings).toMatchObject({ pricingMode: 'PER_MINUTE', audioPrice: null, videoPrice: null, isAvailable: false, access: 'EVERYONE' });
+    expect((await setSettings(c, { audioPrice: 700 })).body.settings).toMatchObject({ audioPrice: 700, videoPrice: null, isAvailable: false });
+    expect((await setSettings(c, { isAvailable: true })).body.settings).toMatchObject({ audioPrice: 700, isAvailable: true });
+    expect((await setSettings(c, { videoPrice: null })).body.settings).toMatchObject({ audioPrice: 700, videoPrice: null });
   });
   it('refuse : prix hors bornes, durée trop longue, disponibilité sans prix, corps vide ou inconnu', async () => {
     const c = await creatorSignedIn(1);
-    expect((await setSettings(c, { audioPriceFcfa: 5 })).status).toBe(400);
-    expect((await setSettings(c, { audioPriceFcfa: 99_999_999 })).status).toBe(400);
-    expect((await setSettings(c, { audioPriceFcfa: 1.5 })).status).toBe(400);
+    expect((await setSettings(c, { audioPrice: 5 })).status).toBe(400);
+    expect((await setSettings(c, { audioPrice: 99_999_999 })).status).toBe(400);
+    expect((await setSettings(c, { audioPrice: 1.5 })).status).toBe(400);
     expect((await setSettings(c, { maxDurationMinutes: 100_000 })).status).toBe(400);
     const none = await setSettings(c, { isAvailable: true });
     expect(none.status).toBe(400); expect(none.body.error.code).toBe('NO_CALL_PRICE');
@@ -74,7 +90,7 @@ describe('réglages d’appel du créateur', () => {
     const u = await signedIn(1);
     const r = await api().get(`${C}/settings`).set(u.auth);
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ enabled: true, limits: { minPriceFcfa: 100 }, ringSeconds: 45, commissionBps: 2000 });
+    expect(r.body).toMatchObject({ enabled: true, limits: { byCurrency: { XAF: { minPrice: 100 } } }, ringSeconds: 45, commissionBps: 2000 });
   });
 });
 
@@ -83,9 +99,9 @@ describe('offre d’appel d’un créateur', () => {
     const a = await signedIn(1); const c = await creatorSignedIn(2);
     const off = await api().get(`${C}/creators/${c.user.id}/offer`).set(a.auth);
     expect(off.status).toBe(200); expect(off.body).toMatchObject({ canCall: false, offer: null, reason: { code: 'CREATOR_UNAVAILABLE' } });
-    await setSettings(c, { audioPriceFcfa: 500, isAvailable: true });
+    await setSettings(c, { audioPrice: 500, isAvailable: true });
     const on = await api().get(`${C}/creators/${c.user.id}/offer`).set(a.auth);
-    expect(on.body).toMatchObject({ canCall: true, reason: null, offer: { pricingMode: 'PER_MINUTE', audioPriceFcfa: 500, videoPriceFcfa: null, busy: false } });
+    expect(on.body).toMatchObject({ canCall: true, reason: null, offer: { pricingMode: 'PER_MINUTE', audioPrice: 500, videoPrice: null, busy: false } });
   });
   it('404 pour un compte non créateur, soi-même ou un blocage ; accès « abonnés » expliqué', async () => {
     const a = await signedIn(1); const b = await signedIn(2); const c = await openCreator(3, { access: 'FOLLOWERS' });
@@ -104,10 +120,10 @@ describe('demande d’appel et paiement', () => {
     const a = await signedIn(1); const c = await openCreator(2);
     const r = await request(a, c, { minutes: 10 });
     expect(r.status).toBe(202);
-    expect(r.body.call).toMatchObject({ direction: 'OUTGOING', status: 'AWAITING_PAYMENT', type: 'AUDIO', payment: { status: 'PENDING' }, money: { prepaidFcfa: 5000 } });
+    expect(r.body.call).toMatchObject({ direction: 'OUTGOING', status: 'AWAITING_PAYMENT', type: 'AUDIO', payment: { status: 'PENDING' }, money: { prepaid: 5000 } });
     expect(JSON.stringify(r.body)).not.toContain('reference');
     expect(memPay.requests).toHaveLength(1);
-    expect(memPay.requests[0]).toMatchObject({ amountFcfa: 5000, operator: 'AIRTEL_MONEY' });
+    expect(memPay.requests[0]).toMatchObject({ amount: 5000, operator: 'AIRTEL_MONEY' });
     expect(memPay.requests[0].reference.length).toBeLessThanOrEqual(13);
     expect(memPay.requests[0].reference.startsWith('C')).toBe(true);
     // le créateur ne voit ni l'appel, ni sonnerie
@@ -119,14 +135,14 @@ describe('demande d’appel et paiement', () => {
     expect(saved.payerPhoneHint).toBe('3456'); expect(JSON.stringify(saved)).not.toContain(PHONE);
   });
   it('vidéo et tarif par session : prix de la session, durée = durée maximale', async () => {
-    const a = await signedIn(1); const c = await openCreator(2, { pricingMode: 'PER_SESSION', videoPriceFcfa: 8000, maxDurationMinutes: 20 });
+    const a = await signedIn(1); const c = await openCreator(2, { pricingMode: 'PER_SESSION', videoPrice: 8000, maxDurationMinutes: 20 });
     const r = await request(a, c, { type: 'VIDEO', minutes: 3 });
     expect(r.status).toBe(202);
-    expect(r.body.call).toMatchObject({ pricingMode: 'PER_SESSION', requestedMinutes: 20, money: { prepaidFcfa: 8000 } });
-    expect(memPay.requests[0].amountFcfa).toBe(8000);
+    expect(r.body.call).toMatchObject({ pricingMode: 'PER_SESSION', requestedMinutes: 20, money: { prepaid: 8000 } });
+    expect(memPay.requests[0].amount).toBe(8000);
   });
   it('refuse : soi-même, compte non créateur, indisponible, type non proposé, durée ou montant trop élevé, corps invalide', async () => {
-    const a = await signedIn(1); const plain = await signedIn(2); const closed = await creatorSignedIn(3); const c = await openCreator(4, { videoPriceFcfa: null });
+    const a = await signedIn(1); const plain = await signedIn(2); const closed = await creatorSignedIn(3); const c = await openCreator(4, { videoPrice: null });
     expect((await request(a, a)).status).toBe(400); // soi-même
     expect((await request(c, c)).status).toBe(400);
     expect((await request(a, plain)).status).toBe(404);
@@ -145,7 +161,7 @@ describe('demande d’appel et paiement', () => {
   it('minutes par défaut = 5 (ou la durée maximale si elle est plus courte)', async () => {
     const a = await signedIn(1); const c = await openCreator(2);
     const r = await api().post(C).set(a.auth).send({ calleeId: c.user.id, type: 'AUDIO', operator: 'MOOV_MONEY', phone: PHONE });
-    expect(r.body.call).toMatchObject({ requestedMinutes: 5, money: { prepaidFcfa: 2500 } });
+    expect(r.body.call).toMatchObject({ requestedMinutes: 5, money: { prepaid: 2500 } });
   });
   it('un blocage (dans un sens ou l’autre) rend le créateur introuvable', async () => {
     const a = await signedIn(1); const c = await openCreator(2);
@@ -206,7 +222,7 @@ describe('règlement du paiement (webhook)', () => {
     expect(inc.body.items).toHaveLength(1);
     expect(inc.body.items[0]).toMatchObject({ id, direction: 'INCOMING', status: 'RINGING', type: 'AUDIO' });
     expect(inc.body.items[0].other.username).toBe(a.user.username);
-    expect(inc.body.items[0].money.prepaidFcfa).toBeUndefined(); // le créateur ne voit pas le prépayé du payeur
+    expect(inc.body.items[0].money.prepaid).toBeUndefined(); // le créateur ne voit pas le prépayé du payeur
     const paidAt = (await row(id)).paidAt!.getTime();
     await settle(saved.reference!); // rejoué par le prestataire : sans effet
     expect(await row(id)).toMatchObject({ status: 'RINGING', paymentStatus: 'PAID' });
@@ -238,7 +254,7 @@ describe('règlement du paiement (webhook)', () => {
     // une confirmation correcte ultérieure résout la vérification, mais le paiement est trop tardif pour faire sonner l'appel : remboursement dû
     await prisma.call.update({ where: { id: r.body.call.id }, data: { initiatedAt: ago(10 * 60_000) } });
     await settle(await refOf(r.body.call.id), 'SUCCESS', { amount: 5000 });
-    expect(await row(r.body.call.id)).toMatchObject({ paymentStatus: 'PAID', status: 'MISSED', endReason: 'STALE_PAYMENT', refundFcfa: 5000, refundStatus: 'DUE', consumedFcfa: 0 });
+    expect(await row(r.body.call.id)).toMatchObject({ paymentStatus: 'PAID', status: 'MISSED', endReason: 'STALE_PAYMENT', refundAmount: 5000, refundStatus: 'DUE', consumedAmount: 0 });
   });
   it('succès tardif sur un paiement déjà échoué : REVIEW (jamais ignoré)', async () => {
     const a = await signedIn(1); const c = await openCreator(2);
@@ -253,7 +269,7 @@ describe('règlement du paiement (webhook)', () => {
     const r = await request(a, c);
     await prisma.call.update({ where: { id: r.body.call.id }, data: { initiatedAt: ago(20 * 60_000) } });
     await settle(await refOf(r.body.call.id));
-    expect(await row(r.body.call.id)).toMatchObject({ status: 'MISSED', endReason: 'STALE_PAYMENT', paymentStatus: 'PAID', refundFcfa: 5000, refundStatus: 'DUE', creatorFcfa: 0 });
+    expect(await row(r.body.call.id)).toMatchObject({ status: 'MISSED', endReason: 'STALE_PAYMENT', paymentStatus: 'PAID', refundAmount: 5000, refundStatus: 'DUE', creatorAmount: 0 });
     expect((await api().get(`${C}/incoming`).set(c.auth)).body.items).toEqual([]);
   });
   it('créateur devenu occupé entre-temps : pas de sonnerie, remboursement dû ; pas de nouvelle demande vers un créateur occupé', async () => {
@@ -264,7 +280,7 @@ describe('règlement du paiement (webhook)', () => {
     await settle(await refOf(first.body.call.id));
     await settle(await refOf(second.body.call.id)); // le créateur sonne déjà pour a
     expect(await row(first.body.call.id)).toMatchObject({ status: 'RINGING' });
-    expect(await row(second.body.call.id)).toMatchObject({ status: 'MISSED', endReason: 'CREATOR_BUSY', refundFcfa: 5000, refundStatus: 'DUE' });
+    expect(await row(second.body.call.id)).toMatchObject({ status: 'MISSED', endReason: 'CREATOR_BUSY', refundAmount: 5000, refundStatus: 'DUE' });
     const third = await signedIn(4);
     const busy = await request(third, c);
     expect(busy.status).toBe(409); expect(busy.body.error.code).toBe('CREATOR_BUSY');
@@ -333,7 +349,7 @@ describe('décrocher, refuser, annuler', () => {
     const id = await ringing(a, c);
     const r = await act(c, id, 'decline');
     expect(r.status).toBe(200);
-    expect(await row(id)).toMatchObject({ status: 'DECLINED', endReason: 'DECLINED', consumedFcfa: 0, creatorFcfa: 0, refundFcfa: 5000, refundStatus: 'DUE' });
+    expect(await row(id)).toMatchObject({ status: 'DECLINED', endReason: 'DECLINED', consumedAmount: 0, creatorAmount: 0, refundAmount: 5000, refundStatus: 'DUE' });
     expect((await act(c, id, 'accept')).status).toBe(409);
     expect((await act(c, id, 'decline')).status).toBe(409);
     expect((await api().get(`${C}/incoming`).set(c.auth)).body.items).toEqual([]);
@@ -346,7 +362,7 @@ describe('décrocher, refuser, annuler', () => {
     await settle(await refOf(pending.body.call.id));
     const r = await act(a, pending.body.call.id, 'cancel');
     expect(r.status).toBe(200);
-    expect(await row(pending.body.call.id)).toMatchObject({ status: 'CANCELLED', endReason: 'CANCELLED', refundFcfa: 5000, refundStatus: 'DUE' });
+    expect(await row(pending.body.call.id)).toMatchObject({ status: 'CANCELLED', endReason: 'CANCELLED', refundAmount: 5000, refundStatus: 'DUE' });
     expect((await act(a, pending.body.call.id, 'cancel')).status).toBe(409);
   });
   it('sonnerie expirée : appel manqué, remboursement dû (lecture, puis balayage)', async () => {
@@ -354,7 +370,7 @@ describe('décrocher, refuser, annuler', () => {
     const id = await ringing(a, c);
     await prisma.call.update({ where: { id }, data: { ringExpiresAt: ago(1000) } });
     expect((await act(c, id, 'accept')).status).toBe(409); // trop tard
-    expect(await row(id)).toMatchObject({ status: 'MISSED', endReason: 'RING_TIMEOUT', refundFcfa: 5000, refundStatus: 'DUE' });
+    expect(await row(id)).toMatchObject({ status: 'MISSED', endReason: 'RING_TIMEOUT', refundAmount: 5000, refundStatus: 'DUE' });
     expect((await api().get(`${C}/incoming`).set(c.auth)).body.items).toEqual([]);
 
     const id2 = await ringing(b, d);
@@ -379,17 +395,17 @@ describe('fin d’appel et décompte', () => {
     await prisma.call.update({ where: { id }, data: { answeredAt: ago(125_000) } });
     const r = await act(a, id, 'end');
     expect(r.status).toBe(200);
-    expect(r.body.call).toMatchObject({ status: 'ENDED', endReason: 'HANGUP', money: { prepaidFcfa: 5000, consumedFcfa: 1500, refundFcfa: 3500, refundStatus: 'DUE' } });
+    expect(r.body.call).toMatchObject({ status: 'ENDED', endReason: 'HANGUP', money: { prepaid: 5000, consumed: 1500, refund: 3500, refundStatus: 'DUE' } });
     const saved = await row(id);
-    expect(saved).toMatchObject({ consumedFcfa: 1500, commissionFcfa: 300, creatorFcfa: 1200, commissionBps: 2000, refundFcfa: 3500 });
+    expect(saved).toMatchObject({ consumedAmount: 1500, commissionAmount: 300, creatorAmount: 1200, commissionBps: 2000, refundAmount: 3500 });
     expect(saved.actualSeconds).toBeGreaterThanOrEqual(125); expect(saved.actualSeconds).toBeLessThan(130);
-    expect(saved.consumedFcfa! + saved.refundFcfa).toBe(saved.grossFcfa);
-    expect(saved.commissionFcfa! + saved.creatorFcfa!).toBe(saved.consumedFcfa);
+    expect(saved.consumedAmount! + saved.refundAmount).toBe(saved.grossAmount);
+    expect(saved.commissionAmount! + saved.creatorAmount!).toBe(saved.consumedAmount);
     expect(memCalls.closed).toContain(id);
     // le créateur voit sa part, pas le prépayé
     const cv = await getCall(c, id);
-    expect(cv.body.call.money).toMatchObject({ consumedFcfa: 1500, creatorFcfa: 1200, commissionFcfa: 300 });
-    expect(cv.body.call.money.prepaidFcfa).toBeUndefined();
+    expect(cv.body.call.money).toMatchObject({ consumed: 1500, creatorNet: 1200, commission: 300 });
+    expect(cv.body.call.money.prepaid).toBeUndefined();
   });
   it('l’un ou l’autre peut raccrocher ; raccrocher deux fois est idempotent', async () => {
     const a = await signedIn(1); const c = await openCreator(2);
@@ -398,29 +414,29 @@ describe('fin d’appel et décompte', () => {
     expect((await act(c, id, 'end')).status).toBe(200);
     const first = await row(id);
     expect((await act(a, id, 'end')).status).toBe(200);
-    expect(await row(id)).toMatchObject({ consumedFcfa: first.consumedFcfa, endedAt: first.endedAt });
+    expect(await row(id)).toMatchObject({ consumedAmount: first.consumedAmount, endedAt: first.endedAt });
     expect((await act(await signedIn(3), id, 'end')).status).toBe(404);
   });
   it('coupure immédiate (< 10 s) : appel non facturé, remboursement intégral', async () => {
     const a = await signedIn(1); const c = await openCreator(2);
     const id = await active(a, c);
     const r = await act(a, id, 'end');
-    expect(r.body.call).toMatchObject({ status: 'ENDED', money: { consumedFcfa: 0, refundFcfa: 5000, refundStatus: 'DUE' } });
-    expect(await row(id)).toMatchObject({ creatorFcfa: 0, commissionFcfa: 0 });
+    expect(r.body.call).toMatchObject({ status: 'ENDED', money: { consumed: 0, refund: 5000, refundStatus: 'DUE' } });
+    expect(await row(id)).toMatchObject({ creatorAmount: 0, commissionAmount: 0 });
   });
   it('tarif par session : due en entier dès que l’appel a vraiment commencé', async () => {
-    const a = await signedIn(1); const c = await openCreator(2, { pricingMode: 'PER_SESSION', audioPriceFcfa: 8000, maxDurationMinutes: 20 });
+    const a = await signedIn(1); const c = await openCreator(2, { pricingMode: 'PER_SESSION', audioPrice: 8000, maxDurationMinutes: 20 });
     const id = await active(a, c);
     await prisma.call.update({ where: { id }, data: { answeredAt: ago(30_000) } });
     await act(c, id, 'end');
-    expect(await row(id)).toMatchObject({ consumedFcfa: 8000, commissionFcfa: 1600, creatorFcfa: 6400, refundFcfa: 0, refundStatus: 'NONE' });
+    expect(await row(id)).toMatchObject({ consumedAmount: 8000, commissionAmount: 1600, creatorAmount: 6400, refundAmount: 0, refundStatus: 'NONE' });
   });
   it('durée maximale atteinte : fin automatique à l’échéance, plafonnée au prépayé, salle fermée', async () => {
     const a = await signedIn(1); const c = await openCreator(2);
     const id = await active(a, c, { minutes: 10 });
     await prisma.call.update({ where: { id }, data: { answeredAt: ago(11 * 60_000), endsAt: ago(60_000) } });
     const r = await getCall(a, id); // lecture : l'échéance est appliquée
-    expect(r.body.call).toMatchObject({ status: 'ENDED', endReason: 'MAX_DURATION', actualSeconds: 600, money: { consumedFcfa: 5000, refundFcfa: 0, refundStatus: 'NONE' } });
+    expect(r.body.call).toMatchObject({ status: 'ENDED', endReason: 'MAX_DURATION', actualSeconds: 600, money: { consumed: 5000, refund: 0, refundStatus: 'NONE' } });
     expect(memCalls.closed).toContain(id);
   });
   it('balayage : clôt les appels dont personne n’a raccroché', async () => {
@@ -428,7 +444,7 @@ describe('fin d’appel et décompte', () => {
     const id = await active(a, c, { minutes: 5 });
     await prisma.call.update({ where: { id }, data: { answeredAt: ago(6 * 60_000), endsAt: ago(30_000) } });
     expect((await sweepCalls()).processed).toBe(1);
-    expect(await row(id)).toMatchObject({ status: 'ENDED', endReason: 'MAX_DURATION', consumedFcfa: 2500, actualSeconds: 300 });
+    expect(await row(id)).toMatchObject({ status: 'ENDED', endReason: 'MAX_DURATION', consumedAmount: 2500, actualSeconds: 300 });
   });
   it('un appel non décroché ne peut pas être « raccroché » (409)', async () => {
     const a = await signedIn(1); const c = await openCreator(2);

@@ -5,7 +5,7 @@ import { prisma } from '../../config/db';
 import { authed, requireAuth } from '../../middleware/auth';
 import { reportLimiter } from '../../middleware/rateLimit';
 import { wrap } from '../../utils/async';
-import { badRequest, notFound } from '../../utils/errors';
+import { badRequest, forbidden, notFound } from '../../utils/errors';
 import { body } from '../../utils/validate';
 import { loadVisible } from '../content/access';
 import type { Kind } from '../content/types';
@@ -14,7 +14,7 @@ export const moderationRouter = Router();
 moderationRouter.use(requireAuth);
 
 const reportSchema = z.object({
-  targetType: z.enum(['USER', 'VIDEO', 'SHORT', 'LIVE', 'COMMENT', 'MESSAGE', 'PAID_CONTENT']),
+  targetType: z.enum(['USER', 'GROUP', 'VIDEO', 'SHORT', 'LIVE', 'COMMENT', 'MESSAGE', 'PAID_CONTENT']),
   targetId: z.string().min(1).max(64),
   reason: z.enum(['SPAM', 'HARASSMENT', 'HATE', 'NUDITY', 'VIOLENCE', 'SCAM', 'IMPERSONATION', 'MINOR_SAFETY', 'OTHER']),
   details: z.string().trim().max(500, '500 caractères maximum').optional(),
@@ -33,6 +33,11 @@ async function assertReportable(me: User, type: string, id: string) {
     if (!target || target.status === 'DELETED') throw notFound('Utilisateur introuvable');
     return;
   }
+  if (type === 'GROUP') {
+    const group = await prisma.conversation.findUnique({ where: { id }, select: { id: true, isGroup: true, members: { select: { userId: true } } } });
+    if (!group?.isGroup || !group.members.some((m) => m.userId === me.id)) throw notFound('Groupe introuvable');
+    return;
+  }
   if (type === 'VIDEO' || type === 'SHORT') {
     const row = await loadVisible(me, type as Kind, id);
     if (row.authorId === me.id) throw self();
@@ -44,6 +49,7 @@ async function assertReportable(me: User, type: string, id: string) {
     const member = message?.conversation.members.find(m=>m.userId===me.id);
     if (!message || message.deletedAt || !member || (member.clearedAt && message.createdAt <= member.clearedAt)) throw notFound('Message introuvable');
     if (message.senderId===me.id) throw self();
+    if (message.viewOnce) throw forbidden('VIEW_ONCE_NOT_REPORTABLE', 'Un message à vue unique ne peut pas être signalé');
     return;
   }
   if (type === 'LIVE') {

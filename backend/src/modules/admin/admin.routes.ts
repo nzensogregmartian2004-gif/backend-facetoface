@@ -1,15 +1,15 @@
+import { gateAdminRoute, requirePermission } from './roles';
 import { Router } from 'express';
 import { authed, requireAuth } from '../../middleware/auth';
-import { forbidden } from '../../utils/errors';
 import { wrap } from '../../utils/async';
 import { parse } from '../../utils/validate';
 import * as svc from './admin.service';
 import * as fraud from '../fraud/fraud.service';
 import { contentActionSchema, listQuerySchema, refundRequestSchema, reportStatusSchema, reportListQuerySchema, transactionQuerySchema, userStatusSchema, withdrawalStatusSchema, withdrawalListQuerySchema, fraudEventListQuerySchema, fraudStatusSchema } from './admin.schemas';
 
-export const adminRouter=Router(); adminRouter.use(requireAuth);
+export const adminRouter=Router(); adminRouter.use(requireAuth, gateAdminRoute);
 const me=(req:Parameters<typeof authed>[0])=>authed(req).user;
-const guard=(req:Parameters<typeof authed>[0])=>{if(!svc.isAdmin(me(req).id)) throw forbidden('ADMIN_REQUIRED','Droits administrateur requis');};
+const guard=(req:Parameters<typeof authed>[0])=>{requirePermission(me(req),'admin.access');};
 
 adminRouter.get('/dashboard',wrap(async(req,res)=>{guard(req);res.json(await svc.dashboard(me(req)))}));
 adminRouter.get('/users',wrap(async(req,res)=>res.json(await svc.searchUsers(me(req),parse(listQuerySchema,req.query)))));

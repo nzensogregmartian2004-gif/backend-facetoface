@@ -71,6 +71,10 @@ export async function holdPaymentReference(reference: string, reason = 'FRAUD_RI
       const row = await tx.creatorSubscriptionPayment.findUnique({ where: { reference }, select: { id: true, buyerId: true, status: true } });
       if (!row) return false; userId = row.buyerId;
       if (row.status === 'PENDING' || row.status === 'REVIEW') await tx.creatorSubscriptionPayment.update({ where: { id: row.id }, data: { status: 'REVIEW', reviewReason: reason } });
+    } else if (reference.startsWith('VC')) {
+      const row = await tx.paidContentPurchase.findUnique({ where: { reference }, select: { id: true, buyerId: true, status: true } });
+      if (!row) return false; userId = row.buyerId;
+      if (row.status === 'PENDING' || row.status === 'REVIEW') await tx.paidContentPurchase.update({ where: { id: row.id }, data: { status: 'REVIEW', reviewReason: reason } });
     } else if (reference.startsWith('V')) {
       const row = await tx.customVideoPayment.findUnique({ where: { reference }, select: { id: true, buyerId: true, status: true } });
       if (!row) return false; userId = row.buyerId;

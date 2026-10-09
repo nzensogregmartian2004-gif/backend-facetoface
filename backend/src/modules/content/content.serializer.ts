@@ -17,7 +17,7 @@ export const PUBLIC_AUTHOR_SELECT = {
 const thumbUrl = (key: string | null) => (key ? objectStorage.readUrl(key) || null : null);
 
 /** Représentation d'un contenu. L'auteur passe par `serializePublic` (seul point de sortie d'un utilisateur). */
-export function serializeContent(kind: Kind, row: ContentWithPublicAuthor, viewer: User, flags: { liked: boolean; followsAuthor: boolean }) {
+export function serializeContent(kind: Kind, row: ContentWithPublicAuthor, viewer: User, flags: { liked: boolean; followsAuthor: boolean; purchased: boolean }) {
   const isOwner = row.authorId === viewer.id;
   return {
     id: row.id,
@@ -25,6 +25,7 @@ export function serializeContent(kind: Kind, row: ContentWithPublicAuthor, viewe
     title: row.title,
     description: row.description,
     category: row.category,
+    paid: row.price != null ? { enabled: true, price: row.price, currency: row.currency!, purchased: isOwner || flags.purchased } : null,
     visibility: row.visibility,
     status: row.status,
     subscriptionOnly: row.subscriptionOnly,
@@ -50,13 +51,15 @@ export async function serializeMany(kind: Kind, rows: ContentWithPublicAuthor[],
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
   const authorIds = [...new Set(rows.map((r) => r.authorId))];
-  const [likes, follows] = await Promise.all([
+  const [likes, follows, purchases] = await Promise.all([
     prisma.like.findMany({ where: { userId: viewer.id, targetType: kind, targetId: { in: ids } }, select: { targetId: true } }),
     prisma.follow.findMany({ where: { followerId: viewer.id, followingId: { in: authorIds } }, select: { followingId: true } }),
+    prisma.paidContentPurchase.findMany({ where: { buyerId: viewer.id, contentType: kind, contentId: { in: ids }, status: 'PAID' }, select: { contentId: true } }),
   ]);
   const liked = new Set(likes.map((l) => l.targetId));
   const followed = new Set(follows.map((f) => f.followingId));
-  return rows.map((r) => serializeContent(kind, r, viewer, { liked: liked.has(r.id), followsAuthor: followed.has(r.authorId) }));
+  const purchased = new Set(purchases.map((p) => p.contentId));
+  return rows.map((r) => serializeContent(kind, r, viewer, { liked: liked.has(r.id), followsAuthor: followed.has(r.authorId), purchased: purchased.has(r.id) }));
 }
 
 export const serializeOne = async (kind: Kind, row: ContentWithPublicAuthor, viewer: User) => (await serializeMany(kind, [row], viewer))[0];

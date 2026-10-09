@@ -23,7 +23,7 @@ describe('Étape 24 — parcours end-to-end', () => {
 
     // Abonnement créateur + paiement réel via le webhook de test.
     const plan = await api().put('/api/subscriptions/me/plan').set(creator.auth).send({
-      priceFcfa: 1000,
+      price: 1000,
       benefits: { exclusiveContent: true, directMessages: true, subscriberCalls: true },
       isActive: true,
     });
@@ -61,7 +61,7 @@ describe('Étape 24 — parcours end-to-end', () => {
     const conversation = await api().post('/api/messages/conversations').set(fanRegistration.auth).send({ userId: creator.user.id });
     expect(conversation.status).toBe(200);
     const conversationId = conversation.body.conversation.id as string;
-    const paidMessage = await api().post(`/api/messages/conversations/${conversationId}/messages`).set(creator.auth).send({ text: 'Contenu réservé', priceFcfa: 500 });
+    const paidMessage = await api().post(`/api/messages/conversations/${conversationId}/messages`).set(creator.auth).send({ text: 'Contenu réservé', price: 500 });
     expect(paidMessage.status).toBe(201);
     const messageId = paidMessage.body.message.id as string;
     const unlock = await api().post(`/api/messages/${messageId}/unlock`).set(fanRegistration.auth).send(PAY);
@@ -74,7 +74,7 @@ describe('Étape 24 — parcours end-to-end', () => {
 
     // Appel : paiement, acceptation, token et fin de session.
     const callSettings = await api().put('/api/calls/me/settings').set(creator.auth).send({
-      pricingMode: 'PER_MINUTE', audioPriceFcfa: 100, maxDurationMinutes: 10, access: 'EVERYONE', isAvailable: true,
+      pricingMode: 'PER_MINUTE', audioPrice: 100, maxDurationMinutes: 10, access: 'EVERYONE', isAvailable: true,
     });
     expect(callSettings.status).toBe(200);
     const callRequest = await api().post('/api/calls').set(fanRegistration.auth).send({ calleeId: creator.user.id, type: 'AUDIO', minutes: 1, ...CALL });
@@ -114,7 +114,7 @@ describe('Étape 24 — parcours end-to-end', () => {
   it('erreurs critiques du parcours : paiement refusé, webhook invalide et permission administrateur', async () => {
     const creator = await creatorSignedIn(1);
     const user = await signedIn(2);
-    await api().put('/api/subscriptions/me/plan').set(creator.auth).send({ priceFcfa: 1000, benefits: {}, isActive: true });
+    await api().put('/api/subscriptions/me/plan').set(creator.auth).send({ price: 1000, benefits: {}, isActive: true });
 
     const rejected = await api().post(`/api/subscriptions/creators/${creator.user.id}`).set(user.auth).send(PAY);
     expect(rejected.status).toBe(202);

@@ -1,0 +1,17 @@
+import { Router } from 'express';
+import { payments } from '../../utils/payments';
+import { authed, requireAuth } from '../../middleware/auth';
+import { wrap } from '../../utils/async';
+import { body } from '../../utils/validate';
+import { coinSpendLimiter, paymentLimiter } from '../../middleware/rateLimit';
+import * as svc from './coins.service';
+import { buyCoinsSchema, giftAdminSchema, giftAdminPatchSchema, packageAdminSchema, packageAdminPatchSchema, sendGiftSchema, sendTipSchema } from './coins.schemas';
+export const coinsRouter=Router(); coinsRouter.use(requireAuth); const me=(req:Parameters<typeof authed>[0])=>authed(req).user;
+coinsRouter.get('/catalog',wrap(async(_req,res)=>res.json({...(await svc.catalog()),paymentOperators:payments.operators()}))); coinsRouter.get('/balance',wrap(async(req,res)=>res.json(await svc.balance(me(req))))); coinsRouter.get('/ledger',wrap(async(req,res)=>res.json(await svc.ledger(me(req)))));
+coinsRouter.get('/purchases/:id',wrap(async(req,res)=>res.json(await svc.purchaseStatus(me(req),String(req.params.id)))));
+coinsRouter.post('/purchases',paymentLimiter,wrap(async(req,res)=>res.status(202).json(await svc.buyCoins(me(req),body(buyCoinsSchema,req)))));
+coinsRouter.post('/gifts/send',coinSpendLimiter,wrap(async(req,res)=>res.status(201).json(await svc.sendGift(me(req),body(sendGiftSchema,req)))));
+coinsRouter.post('/tips/send',coinSpendLimiter,wrap(async(req,res)=>res.status(201).json(await svc.sendTip(me(req),body(sendTipSchema,req)))));
+coinsRouter.get('/admin/gifts',wrap(async(req,res)=>res.json(await svc.adminGifts(me(req))))); coinsRouter.get('/admin/packages',wrap(async(req,res)=>res.json(await svc.adminPackages(me(req)))));
+coinsRouter.post('/admin/gifts',wrap(async(req,res)=>res.status(201).json({gift:await svc.upsertGift(me(req),undefined,body(giftAdminSchema,req))}))); coinsRouter.patch('/admin/gifts/:id',wrap(async(req,res)=>res.json({gift:await svc.upsertGift(me(req),String(req.params.id),body(giftAdminPatchSchema,req))})));
+coinsRouter.post('/admin/packages',wrap(async(req,res)=>res.status(201).json({package:await svc.upsertPackage(me(req),undefined,body(packageAdminSchema,req))}))); coinsRouter.patch('/admin/packages/:id',wrap(async(req,res)=>res.json({package:await svc.upsertPackage(me(req),String(req.params.id),body(packageAdminPatchSchema,req))})));

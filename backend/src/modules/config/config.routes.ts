@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/auth';
-import { isAdmin } from '../admin/admin.service';
+import { can } from '../admin/roles';
 import { forbidden } from '../../utils/errors';
 import { authed } from '../../middleware/auth';
 import { configVersionListSchema, listConfigSchema, restoreDefaultsSchema, updateConfigSchema, upsertConfigSchema } from './config.schemas';
@@ -9,7 +9,7 @@ import { getConfig, getConfigVersion, listConfigVersions, listConfigs, restoreDe
 export const configRouter = Router();
 configRouter.use(requireAuth);
 configRouter.use((req, _res, next) => {
-  if (!isAdmin(authed(req).user.id)) return next(forbidden('ADMIN_REQUIRED', 'Droits administrateur requis'));
+  if (!can(authed(req).user, 'admin.access')) return next(forbidden('ADMIN_REQUIRED', 'Droits administrateur requis'));
   next();
 });
 

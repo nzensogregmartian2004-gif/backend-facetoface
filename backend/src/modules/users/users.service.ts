@@ -1,16 +1,17 @@
+import { currencyForCountry } from '../geo/geo.service';
 import bcrypt from 'bcryptjs';
 import { Prisma, type User } from '@prisma/client';
 import { prisma } from '../../config/db';
-import { badRequest, conflict, notFound } from '../../utils/errors';
+import { badRequest, conflict, forbidden, notFound } from '../../utils/errors';
 import { serializePublic, serializeSelf } from '../../utils/serializers';
 import { localStorage, sniffImage } from '../../utils/storage';
 
 export type ProfilePatch = { displayName?: string; username?: string; bio?: string | null; country?: string | null; links?: string[] };
-export type PrivacyPatch = { profileVisibility?: 'PUBLIC' | 'PRIVATE'; allowMessagesFrom?: 'EVERYONE' | 'FOLLOWERS' | 'NOBODY'; showOnlineStatus?: boolean };
+export type PrivacyPatch = { profileVisibility?: 'PUBLIC' | 'PRIVATE'; allowMessagesFrom?: 'EVERYONE' | 'FOLLOWERS' | 'NOBODY'; showOnlineStatus?: boolean; showReadReceipts?: boolean };
 
 export async function updateProfile(user: User, patch: ProfilePatch) {
   try {
-    const u = await prisma.user.update({ where: { id: user.id }, data: patch });
+    const u = await prisma.user.update({ where: { id: user.id }, data: patch.country ? { ...patch, preferredCurrency: currencyForCountry(patch.country) ?? user.preferredCurrency } : patch });
     return serializeSelf(u);
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -88,7 +89,7 @@ export async function deleteAccount(user: User, password: string) {
         status: 'DELETED', deletedAt: new Date(),
         email: `deleted+${user.id}@deleted.invalid`, username: `deleted_${user.id.slice(-12)}`,
         displayName: 'Compte supprimé', avatarUrl: null, bio: null, country: null, links: [],
-        isCreator: false, emailVerifiedAt: null,
+        isCreator: false, emailVerifiedAt: null, certificationStatus: 'NON_CERTIFIED', certifiedAt: null, certifiedById: null,
         passwordHash: '!',
       },
     }),
@@ -102,4 +103,36 @@ export async function deleteAccount(user: User, password: string) {
   const { purgeSentMessages } = await import('../messages/messages.service.js');
   await purgeSentMessages(user.id);
   if (user.avatarUrl) await localStorage.deleteByUrl(user.avatarUrl);
+}
+
+export async function setBanner(user: User, file: Buffer) {
+  const ext = sniffImage(file);
+  if (!ext) throw badRequest('INVALID_IMAGE', 'Image invalide (JPEG, PNG ou WebP uniquement)');
+  const url = await localStorage.saveBanner(user.id, file, ext);
+  const u = await prisma.user.update({ where: { id: user.id }, data: { bannerUrl: url } });
+  if (user.bannerUrl) await localStorage.deleteByUrl(user.bannerUrl);
+  return serializeSelf(u);
+}
+
+export async function removeBanner(user: User) {
+  const u = await prisma.user.update({ where: { id: user.id }, data: { bannerUrl: null } });
+  if (user.bannerUrl) await localStorage.deleteByUrl(user.bannerUrl);
+  return serializeSelf(u);
+}
+
+/**
+ * Met un contenu en avant sur la chaîne. Le contenu doit appartenir au créateur, être publié et public.
+ * `contentId: null` retire la mise en avant.
+ */
+export async function setFeatured(user: User, input: { type?: 'VIDEO' | 'SHORT'; contentId: string | null }) {
+  if (input.contentId === null) {
+    return serializeSelf(await prisma.user.update({ where: { id: user.id }, data: { featuredContentId: null, featuredContentType: null } }));
+  }
+  if (!user.isCreator) throw forbidden('NOT_CREATOR', 'Réservé aux comptes créateurs');
+  const where = { id: input.contentId, authorId: user.id, status: 'PUBLISHED' as const, visibility: 'PUBLIC' as const, deletedAt: null };
+  const row = input.type === 'VIDEO'
+    ? await prisma.video.findFirst({ where, select: { id: true } })
+    : await prisma.short.findFirst({ where, select: { id: true } });
+  if (!row) throw notFound('Contenu introuvable ou non publié');
+  return serializeSelf(await prisma.user.update({ where: { id: user.id }, data: { featuredContentId: row.id, featuredContentType: input.type } }));
 }

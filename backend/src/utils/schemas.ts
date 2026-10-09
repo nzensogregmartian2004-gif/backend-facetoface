@@ -1,3 +1,4 @@
+import { isKnownCountry } from '../modules/geo/geo.service';
 import { z } from 'zod';
 import { env } from '../config/env';
 import { ageOn } from './dates';
@@ -30,7 +31,8 @@ export const birthDateSchema = z
   .refine((v) => ageOn(new Date(`${v}T00:00:00Z`)) <= 120, 'Date invalide')
   .refine((v) => ageOn(new Date(`${v}T00:00:00Z`)) >= env.MIN_REGISTRATION_AGE, `Vous devez avoir au moins ${env.MIN_REGISTRATION_AGE} ans`);
 
-export const countrySchema = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Code pays ISO à 2 lettres (ex. GA)');
+export const countrySchema = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Code pays ISO à 2 lettres (ex. GA)')
+  .refine((c) => isKnownCountry(c), 'Pays inconnu');
 
 export const linksSchema = z
   .array(z.string().trim().url('Lien invalide').max(200).refine((u) => /^https?:\/\//i.test(u), 'Lien http(s) uniquement'))

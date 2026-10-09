@@ -10,8 +10,8 @@ export function splitAmount(grossAmount: number, commissionBps: number) {
   return { grossAmount, platformFeeAmount, creatorAmount, commissionBps };
 }
 
-// Compatibilité avec les étapes 5/6 historiques qui nomment encore les champs FCFA.
-export function splitAmountFcfa(grossFcfa: number, commissionBps: number) {
-  const x = splitAmount(grossFcfa, commissionBps);
-  return { grossFcfa: x.grossAmount, commissionFcfa: x.platformFeeAmount, creatorFcfa: x.creatorAmount, commissionBps };
+/** Même split, mais avec les noms de colonnes des tables de paiement (`commissionAmount`) et la devise : prêt à être écrit en base. */
+export function splitRecord(grossAmount: number, commissionBps: number, currency: string) {
+  const x = splitAmount(grossAmount, commissionBps);
+  return { grossAmount: x.grossAmount, commissionAmount: x.platformFeeAmount, creatorAmount: x.creatorAmount, commissionBps, currency };
 }

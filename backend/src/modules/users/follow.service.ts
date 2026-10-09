@@ -1,6 +1,7 @@
 import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { badRequest, notFound } from '../../utils/errors';
+import { notify } from '../notifications/notifications.service';
 
 /**
  * Fondation minimale du suivi, nécessaire au feed « Abonnements » (étape 3).
@@ -16,7 +17,8 @@ async function requireFollowable(viewer: User, targetId: string) {
 
 export async function follow(viewer: User, targetId: string) {
   await requireFollowable(viewer, targetId);
-  await prisma.follow.createMany({ data: [{ followerId: viewer.id, followingId: targetId }], skipDuplicates: true });
+  const result = await prisma.follow.createMany({ data: [{ followerId: viewer.id, followingId: targetId }], skipDuplicates: true });
+  if (result.count === 1) await notify(prisma, { userId: targetId, type: 'FOLLOW', actorId: viewer.id, targetType: 'USER', targetId: viewer.id, pushPayload: { type: 'FOLLOW', username: viewer.username } });
 }
 
 export async function unfollow(viewer: User, targetId: string) {

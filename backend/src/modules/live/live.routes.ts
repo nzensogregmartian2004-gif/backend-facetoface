@@ -4,6 +4,7 @@ import { wrap } from '../../utils/async';
 import { parse } from '../../utils/validate';
 import { chatSchema, createLiveSchema, liveListSchema, reactionSchema, updateLiveSchema } from './live.schemas';
 import * as svc from './live.service';
+import { closeLiveRoom } from './live.livekit';
 
 export const liveRouter = Router();
 const me = (req: Parameters<typeof authed>[0]) => authed(req).user;
@@ -14,11 +15,12 @@ liveRouter.get('/', wrap(async (req, res) => {
   res.json({ lives: await svc.listLives(q.status, q.limit) });
 }));
 liveRouter.use(requireAuth);
+liveRouter.get('/mine', wrap(async (req, res) => { res.json(await svc.myLives(me(req))); }));
 liveRouter.get('/:id', wrap(async (req, res) => { res.json({ live: await svc.getLive(id(req), me(req)) }); }));
 liveRouter.post('/', wrap(async (req, res) => { res.status(201).json(await svc.createLive(me(req), createLiveSchema.parse(req.body))); }));
 liveRouter.patch('/:id', wrap(async (req, res) => { res.json({ live: await svc.updateLive(me(req), id(req), updateLiveSchema.parse(req.body)) }); }));
 liveRouter.post('/:id/start', wrap(async (req, res) => { res.json(await svc.startLive(me(req), id(req))); }));
-liveRouter.post('/:id/end', wrap(async (req, res) => { res.json({ live: await svc.endLive(me(req), id(req)) }); }));
+liveRouter.post('/:id/end', wrap(async (req, res) => { const live = await svc.endLive(me(req), id(req)); void closeLiveRoom(id(req)); res.json({ live }); }));
 liveRouter.post('/:id/cancel', wrap(async (req, res) => { res.json({ live: await svc.cancelLive(me(req), id(req)) }); }));
 liveRouter.post('/:id/join', wrap(async (req, res) => { res.json(await svc.joinLive(me(req), id(req))); }));
 liveRouter.post('/:id/leave', wrap(async (req, res) => { res.json(await svc.leaveLive(me(req), id(req))); }));

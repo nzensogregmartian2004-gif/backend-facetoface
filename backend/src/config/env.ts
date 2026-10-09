@@ -39,6 +39,8 @@ const schema = z.object({
   CDN_URL: opt, // si défini, les lectures passent par le CDN (étape 21 : URL signées/transcodage)
   UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().min(60).default(900),
   PLAYBACK_URL_TTL_SECONDS: z.coerce.number().int().min(60).default(7200),
+  // Contenu payant : URL signée très courte, pour qu'un remboursement ou une fin d'accès coupe vite la lecture.
+  PAID_PLAYBACK_URL_TTL_SECONDS: z.coerce.number().int().min(60).default(300),
   // Médias privés (messagerie) : URL TOUJOURS signées, même si CDN_URL est défini (le CDN public n'est jamais utilisé pour eux).
   PRIVATE_MEDIA_URL_TTL_SECONDS: z.coerce.number().int().min(30).default(3600),
   VIDEO_MAX_BYTES: z.coerce.number().int().min(1).max(2_147_483_647).default(1_073_741_824),
@@ -54,10 +56,23 @@ const schema = z.object({
   MESSAGE_MEDIA_ENABLED: flag('true'),
   MESSAGE_IMAGE_MAX_BYTES: z.coerce.number().int().min(1).default(10 * 1024 * 1024),
   MESSAGE_VIDEO_MAX_BYTES: z.coerce.number().int().min(1).default(100 * 1024 * 1024),
+  MESSAGE_ATTACHMENT_MAX_BYTES: z.coerce.number().int().min(1).default(200 * 1024 * 1024),
+  MESSAGE_AUDIO_MAX_BYTES: z.coerce.number().int().min(1).default(50 * 1024 * 1024),
+  /** Taux indicatif (FCFA pour 1 USD) servant UNIQUEMENT à borner les prix saisis en USD ; jamais utilisé pour convertir un paiement. */
+  USD_XAF_REFERENCE_RATE: z.coerce.number().min(1).default(600),
   PAID_MESSAGE_MIN_FCFA: z.coerce.number().int().min(1).default(100),
   PAID_MESSAGE_MAX_FCFA: z.coerce.number().int().min(1).default(200_000),
   // Commission plateforme en points de base (2000 = 20 %, cahier des charges §26). Entier : aucun calcul en virgule flottante.
   PAID_MESSAGE_COMMISSION_BPS: z.coerce.number().int().min(0).max(10_000).default(2000),
+  // Messages à vue unique : durée de validité de l'URL signée remise à l'ouverture, et délai avant purge du média déjà ouvert.
+  VIEW_ONCE_URL_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(120),
+  // Délai technique après la dernière ouverture avant suppression du fichier (le temps que l'URL remise soit chargée). Pas une conservation.
+  VIEW_ONCE_PURGE_DELAY_SECONDS: z.coerce.number().int().min(60).max(86400).default(300),
+  // Vocal de commentaire : pas de limite de durée, seulement une taille maximale (20 Mo ≈ 40 min en AAC 64 kb/s).
+  COMMENT_AUDIO_MAX_BYTES: z.coerce.number().int().min(1).default(20 * 1024 * 1024),
+  // Stories : taille maximale par type de fichier (pas de transcodage, pas de limite de durée côté serveur).
+  STORY_IMAGE_MAX_BYTES: z.coerce.number().int().min(1).default(10 * 1024 * 1024),
+  STORY_VIDEO_MAX_BYTES: z.coerce.number().int().min(1).default(50 * 1024 * 1024),
   // `none` : paiements non configurés (503). `memory` : tests uniquement (refusé en production). `mypvit` : Mobile Money (Airtel Money, Moov Money) via MyPVit.
   // Les paiements MyPVit sont ASYNCHRONES (le client valide sur son téléphone, puis MyPVit appelle notre webhook). Portefeuille, retraits, remboursements : étape 13.
   PAYMENT_DRIVER: z.enum(['none', 'memory', 'mypvit']).default('none'),
@@ -76,8 +91,15 @@ const schema = z.object({
   MYPVIT_URLCODE_STATUS: opt, // facultatif : le format de l'API de statut n'est pas publié ; sans lui, pas de rapprochement automatique (REVIEW manuel)
   MYPVIT_CALLBACK_URL_CODE: opt, // code de l'URL de callback enregistrée dans l'espace MyPVit
   MYPVIT_RECEPTION_URL_CODE: opt, // code de l'URL de réception de la clé secrète (renew-secret)
+  MYPVIT_URLCODE_LINK: opt, // code-url-link : lien de paiement carte (service VISA_MASTERCARD), fourni par MyPVit
+  MYPVIT_REDIRECT_SUCCESS_URL_CODE: opt, // code de l'URL de redirection après succès (carte), fourni par MyPVit
+  MYPVIT_REDIRECT_FAILED_URL_CODE: opt, // code de l'URL de redirection après échec (carte), fourni par MyPVit
   MYPVIT_ACCOUNT_AIRTEL: opt, // operationAccountCode du compte marchand Airtel Money
   MYPVIT_ACCOUNT_MOOV: opt, // operationAccountCode du compte marchand Moov Money
+  MYPVIT_ACCOUNT_VISA: opt, // operationAccountCode du compte marchand Visa
+  MYPVIT_ACCOUNT_MASTERCARD: opt, // operationAccountCode du compte marchand Mastercard
+  MYPVIT_OPERATOR_VISA: z.string().default('VISA'), // operator_code fourni par MPVIT
+  MYPVIT_OPERATOR_MASTERCARD: z.string().default('MASTERCARD'), // operator_code fourni par MPVIT
   MYPVIT_AGENT: z.string().default('FACE-TO-FACE'),
   MYPVIT_PRODUCT: z.string().default('FACETOFACE'),
   /** Adresses IP autorisées à appeler les webhooks (séparées par des virgules). Vide = pas de filtrage IP (le jeton de l'URL reste exigé). */
@@ -121,6 +143,13 @@ const schema = z.object({
   PREMIUM_DEFAULT_TRIAL_DAYS: z.coerce.number().int().min(0).max(90).default(7),
   PREMIUM_ADMIN_USER_IDS: z.string().default(''),
   CALL_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(5).default(15),
+  // ── Étape 0 : bornes et commissions du contenu payant, des pourboires et des cadeaux. Valeurs = .env.example ; ponts temporaires → configuration (étape 17). ──
+  PAID_CONTENT_MIN_FCFA: z.coerce.number().int().min(1).default(500),
+  PAID_CONTENT_MAX_FCFA: z.coerce.number().int().min(1).default(500_000),
+  PAID_CONTENT_COMMISSION_BPS: z.coerce.number().int().min(0).max(10_000).default(2000),
+  TIP_MIN_FCFA: z.coerce.number().int().min(1).default(100),
+  TIP_MAX_FCFA: z.coerce.number().int().min(1).default(500_000),
+  GIFT_COMMISSION_BPS: z.coerce.number().int().min(0).max(10_000).default(2000),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().default(587),
   SMTP_USER: z.string().optional(),
@@ -137,7 +166,7 @@ export const env = parsed.data;
 if (env.NODE_ENV === 'production' && env.PAYMENT_DRIVER === 'memory') throw new Error('PAYMENT_DRIVER=memory est réservé aux tests (voir ENV_VARIABLES.md)');
 if (env.PAYMENT_DRIVER === 'mypvit') {
   const missing = ['MYPVIT_API_PASSWORD', 'MYPVIT_URLCODE_RENEW_SECRET', 'MYPVIT_URLCODE_REST', 'MYPVIT_CALLBACK_URL_CODE', 'MYPVIT_RECEPTION_URL_CODE', 'PAYMENT_WEBHOOK_SECRET'].filter((k) => !env[k as keyof typeof env]);
-  if (!env.MYPVIT_ACCOUNT_AIRTEL && !env.MYPVIT_ACCOUNT_MOOV) missing.push('MYPVIT_ACCOUNT_AIRTEL ou MYPVIT_ACCOUNT_MOOV');
+  if (!env.MYPVIT_ACCOUNT_AIRTEL && !env.MYPVIT_ACCOUNT_MOOV && !env.MYPVIT_ACCOUNT_VISA && !env.MYPVIT_ACCOUNT_MASTERCARD) missing.push('au moins un compte marchand MPVIT');
   if (missing.length) throw new Error(`PAYMENT_DRIVER=mypvit : variables manquantes (voir ENV_VARIABLES.md) : ${missing.join(', ')}`);
 }
 if (env.NODE_ENV === 'production' && env.CALL_PROVIDER === 'memory') throw new Error('CALL_PROVIDER=memory est réservé aux tests (voir ENV_VARIABLES.md)');

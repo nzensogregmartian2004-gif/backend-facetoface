@@ -76,20 +76,26 @@ export async function syncPaymentTransaction(reference: string, status: 'PAID'|'
   return db.$transaction(async tx => {
     let sourceType = 'PAID_MESSAGE'; let sourceId = ''; let userId = ''; let creatorId: string | null = null; let grossAmount = 0; let fee = 0; let creatorAmount = 0; let method: 'MOBILE_MONEY' = 'MOBILE_MONEY'; let currency = 'XAF';
     if (reference.startsWith('C')) {
-      const p = await tx.call.findUnique({ where: { reference }, select: { id:true, callerId:true, calleeId:true, grossFcfa:true, commissionFcfa:true, creatorFcfa:true, paymentStatus:true, operator:true, externalRef:true } });
-      if (!p) return null; sourceType='PAID_CALL'; sourceId=p.id; userId=p.callerId; creatorId=p.calleeId; grossAmount=p.grossFcfa; fee=p.commissionFcfa ?? Math.max(0, p.grossFcfa-p.creatorFcfa!); creatorAmount=p.creatorFcfa ?? 0; externalReference=externalReference ?? p.externalRef ?? undefined;
+      const p = await tx.call.findUnique({ where: { reference }, select: { id:true, callerId:true, calleeId:true, currency:true, grossAmount:true, commissionAmount:true, creatorAmount:true, paymentStatus:true, operator:true, externalRef:true } });
+      if (!p) return null; sourceType='PAID_CALL'; currency=p.currency; sourceId=p.id; userId=p.callerId; creatorId=p.calleeId; grossAmount=p.grossAmount; fee=p.commissionAmount ?? Math.max(0, p.grossAmount-p.creatorAmount!); creatorAmount=p.creatorAmount ?? 0; externalReference=externalReference ?? p.externalRef ?? undefined;
     } else if (reference.startsWith('S')) {
-      const p = await tx.creatorSubscriptionPayment.findUnique({ where: { reference }, select: { id:true,buyerId:true,creatorId:true,grossFcfa:true,commissionFcfa:true,creatorFcfa:true,externalRef:true } });
-      if (!p) return null; sourceType='CREATOR_SUBSCRIPTION'; sourceId=p.id; userId=p.buyerId; creatorId=p.creatorId; grossAmount=p.grossFcfa; fee=p.commissionFcfa; creatorAmount=p.creatorFcfa; externalReference=externalReference ?? p.externalRef ?? undefined;
+      const p = await tx.creatorSubscriptionPayment.findUnique({ where: { reference }, select: { id:true,buyerId:true,creatorId:true,currency:true,grossAmount:true,commissionAmount:true,creatorAmount:true,externalRef:true } });
+      if (!p) return null; sourceType='CREATOR_SUBSCRIPTION'; currency=p.currency; sourceId=p.id; userId=p.buyerId; creatorId=p.creatorId; grossAmount=p.grossAmount; fee=p.commissionAmount; creatorAmount=p.creatorAmount; externalReference=externalReference ?? p.externalRef ?? undefined;
     } else if (reference.startsWith('P')) {
       const p = await tx.premiumPayment.findUnique({ where: { reference }, select: { id:true,userId:true,grossAmount:true,discountAmount:true,netAmount:true,currency:true,externalRef:true } });
       if (!p) return null; sourceType='PREMIUM'; sourceId=p.id; userId=p.userId; creatorId=null; grossAmount=p.netAmount; fee=0; creatorAmount=0; currency='XAF'; externalReference=externalReference ?? p.externalRef ?? undefined;
+    } else if (reference.startsWith('K')) {
+      const p = await tx.coinPurchase.findUnique({ where: { reference }, select: { id:true,userId:true,grossAmount:true,currency:true,externalRef:true } });
+      if (!p) return null; sourceType='COIN_PURCHASE'; sourceId=p.id; userId=p.userId; creatorId=null; grossAmount=p.grossAmount; fee=0; creatorAmount=0; currency=p.currency; externalReference=externalReference ?? p.externalRef ?? undefined;
     } else if (reference.startsWith('V')) {
-      const p = await tx.customVideoPayment.findUnique({ where: { reference }, select: { id:true,buyerId:true,creatorId:true,grossFcfa:true,commissionFcfa:true,creatorFcfa:true,externalRef:true } });
-      if (!p) return null; sourceType='CUSTOM_VIDEO'; sourceId=p.id; userId=p.buyerId; creatorId=p.creatorId; grossAmount=p.grossFcfa; fee=p.commissionFcfa; creatorAmount=p.creatorFcfa; currency='XAF'; externalReference=externalReference ?? p.externalRef ?? undefined;
+      const p = await tx.customVideoPayment.findUnique({ where: { reference }, select: { id:true,buyerId:true,creatorId:true,currency:true,grossAmount:true,commissionAmount:true,creatorAmount:true,externalRef:true } });
+      if (!p) return null; sourceType='CUSTOM_VIDEO'; sourceId=p.id; userId=p.buyerId; creatorId=p.creatorId; grossAmount=p.grossAmount; fee=p.commissionAmount; creatorAmount=p.creatorAmount; currency=p.currency; externalReference=externalReference ?? p.externalRef ?? undefined;
+    } else if (reference.startsWith('G')) {
+      const p = await tx.groupAccessPurchase.findUnique({ where: { reference }, select: { id:true,buyerId:true,sellerId:true,currency:true,grossAmount:true,commissionAmount:true,creatorAmount:true,externalRef:true } });
+      if (!p) return null; sourceType='GROUP_ACCESS'; currency=p.currency; sourceId=p.id; userId=p.buyerId; creatorId=p.sellerId; grossAmount=p.grossAmount; fee=p.commissionAmount; creatorAmount=p.creatorAmount; externalReference=externalReference ?? p.externalRef ?? undefined;
     } else {
-      const p = await tx.messagePurchase.findUnique({ where: { reference }, select: { id:true,buyerId:true,sellerId:true,grossFcfa:true,commissionFcfa:true,creatorFcfa:true,externalRef:true } });
-      if (!p) return null; sourceType='PAID_MESSAGE'; sourceId=p.id; userId=p.buyerId; creatorId=p.sellerId; grossAmount=p.grossFcfa; fee=p.commissionFcfa; creatorAmount=p.creatorFcfa; externalReference=externalReference ?? p.externalRef ?? undefined;
+      const p = await tx.messagePurchase.findUnique({ where: { reference }, select: { id:true,buyerId:true,sellerId:true,currency:true,grossAmount:true,commissionAmount:true,creatorAmount:true,externalRef:true } });
+      if (!p) return null; sourceType='PAID_MESSAGE'; currency=p.currency; sourceId=p.id; userId=p.buyerId; creatorId=p.sellerId; grossAmount=p.grossAmount; fee=p.commissionAmount; creatorAmount=p.creatorAmount; externalReference=externalReference ?? p.externalRef ?? undefined;
     }
     const row = await tx.financialTransaction.upsert({
       where: { sourceType_sourceId: { sourceType, sourceId } },

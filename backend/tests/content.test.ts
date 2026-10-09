@@ -252,7 +252,7 @@ describe('visibilité et accès', () => {
     const pub = await publishedContent(owner.auth);
     const res = await api().get(`/api/videos/${pub.id}/playback`).set(other.auth);
     expect(res.status).toBe(200);
-    expect(res.body.playback.url).toMatch(/^memory:\/\/read\/videos\//);
+    expect(res.body.playback.url).toMatch(/^memory:\/\/private\/videos\//);
     expect(res.body.playback.mimeType).toBe('video/mp4');
     const priv = await publishedContent(owner.auth, 'VIDEO', { visibility: 'PRIVATE' });
     expect((await api().get(`/api/videos/${priv.id}/playback`).set(other.auth)).status).toBe(404);

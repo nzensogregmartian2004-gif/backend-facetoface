@@ -4,7 +4,8 @@ import { prisma } from '../../config/db';
 import { env } from '../../config/env';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../../utils/errors';
 import { payments, type MobileOperator } from '../../utils/payments';
-import { splitAmount } from '../../utils/money';
+import { splitRecord } from '../../utils/money';
+import { assertMobileMoneyCurrency, assertPriceInRange, DEFAULT_CURRENCY } from '../../utils/currency';
 import { objectStorage } from '../../utils/objectStorage';
 import { recordCreatorEarning } from '../monetization/monetization.service';
 import { notify } from '../notifications/notifications.service';
@@ -16,7 +17,7 @@ const creator = async (id: string) => {
   return u;
 };
 const view = (r: any) => ({
-  id: r.id, buyerId: r.buyerId, creatorId: r.creatorId, requestText: r.requestText, priceFcfa: r.priceFcfa, currency: r.currency,
+  id: r.id, buyerId: r.buyerId, creatorId: r.creatorId, requestText: r.requestText, price: r.price, currency: r.currency,
   deadlineAt: r.deadlineAt, status: r.status, acceptedAt: r.acceptedAt, declinedAt: r.declinedAt, cancelledAt: r.cancelledAt,
   deliveredAt: r.deliveredAt, completedAt: r.completedAt, disputedAt: r.disputedAt, disputeReason: r.disputeReason,
   hasVideo: !!r.videoKey, durationSeconds: r.durationSeconds, createdAt: r.createdAt, updatedAt: r.updatedAt,
@@ -30,7 +31,7 @@ export async function createRequest(buyer: User, creatorId: string, input: { req
   await creator(creatorId);
   const active = await prisma.customVideoRequest.findFirst({ where: { buyerId: buyer.id, creatorId, status: { in: ['REQUESTED','AWAITING_PAYMENT','PAYMENT_PENDING','PAYMENT_REVIEW','AWAITING_CREATOR','ACCEPTED','IN_PROGRESS','DELIVERED','DISPUTED'] } }, select: { id: true } });
   if (active) throw conflict('CUSTOM_VIDEO_IN_PROGRESS', 'Une demande est déjà en cours avec ce créateur', { requestId: active.id });
-  const r = await prisma.customVideoRequest.create({ data: { buyerId: buyer.id, creatorId, requestText: input.requestText, currency: 'XAF' }, include: { buyer: true, creator: true } });
+  const r = await prisma.customVideoRequest.create({ data: { buyerId: buyer.id, creatorId, requestText: input.requestText, currency: DEFAULT_CURRENCY }, include: { buyer: true, creator: true } });
   await prisma.notification.create({ data: { userId: creatorId, type: 'CUSTOM_VIDEO_REQUESTED', actorId: buyer.id, targetType: 'CUSTOM_VIDEO', targetId: r.id } });
   return { request: view(r) };
 }
@@ -50,31 +51,33 @@ export async function getOne(user: User, id: string) {
   return { request: view(r) };
 }
 
-export async function offer(user: User, id: string, input: { priceFcfa: number; deadlineDays: number }) {
+export async function offer(user: User, id: string, input: { price: number; currency?: string; deadlineDays: number }) {
   const r = await load(id);
   if (!r || r.creatorId !== user.id) throw notFound('Demande introuvable');
   if (r.status !== 'REQUESTED') throw conflict('INVALID_STATUS', 'Cette demande ne peut plus recevoir de proposition');
-  if (input.priceFcfa < env.CUSTOM_VIDEO_MIN_FCFA || input.priceFcfa > env.CUSTOM_VIDEO_MAX_FCFA) throw badRequest('INVALID_CUSTOM_VIDEO_PRICE', `Le prix doit être compris entre ${env.CUSTOM_VIDEO_MIN_FCFA} et ${env.CUSTOM_VIDEO_MAX_FCFA} FCFA`);
+  const currency = input.currency ?? DEFAULT_CURRENCY;
+  assertPriceInRange(input.price, currency, env.CUSTOM_VIDEO_MIN_FCFA, env.CUSTOM_VIDEO_MAX_FCFA, 'INVALID_CUSTOM_VIDEO_PRICE');
   const deadlineAt = new Date(Date.now() + input.deadlineDays * 86400_000);
-  const u = await prisma.customVideoRequest.update({ where: { id }, data: { priceFcfa: input.priceFcfa, deadlineAt, status: 'AWAITING_PAYMENT' }, include: { buyer: true, creator: true } });
+  const u = await prisma.customVideoRequest.update({ where: { id }, data: { price: input.price, currency, deadlineAt, status: 'AWAITING_PAYMENT' }, include: { buyer: true, creator: true } });
   return { request: view(u) };
 }
 
 export async function pay(user: User, id: string, input: { operator: MobileOperator; phone: string }) {
   const r = await load(id);
   if (!r || r.buyerId !== user.id) throw notFound('Demande introuvable');
-  if (r.status !== 'AWAITING_PAYMENT' || !r.priceFcfa) throw conflict('PAYMENT_NOT_AVAILABLE', 'Le paiement n’est pas disponible pour cette demande');
+  if (r.status !== 'AWAITING_PAYMENT' || !r.price) throw conflict('PAYMENT_NOT_AVAILABLE', 'Le paiement n’est pas disponible pour cette demande');
   if (r.deadlineAt && r.deadlineAt <= new Date()) throw conflict('REQUEST_EXPIRED', 'Le délai proposé est déjà dépassé');
   if (!payments.operators().includes(input.operator)) {
     if (!payments.operators().length) throw new AppError(503, 'PAYMENTS_NOT_CONFIGURED', 'Les paiements ne sont pas encore configurés sur ce serveur');
     throw badRequest('OPERATOR_UNAVAILABLE', "Cet opérateur n'est pas disponible");
   }
-  const split = splitAmount(r.priceFcfa, env.CUSTOM_VIDEO_COMMISSION_BPS);
+  assertMobileMoneyCurrency(r.currency);
+  const split = splitRecord(r.price, env.CUSTOM_VIDEO_COMMISSION_BPS, r.currency);
   const reference = newReference();
-  const payment = await prisma.customVideoPayment.create({ data: { requestId: r.id, buyerId: user.id, creatorId: r.creatorId, grossFcfa: split.grossAmount, commissionFcfa: split.platformFeeAmount, creatorFcfa: split.creatorAmount, commissionBps: split.commissionBps, reference, operator: input.operator, payerPhoneHint: input.phone.slice(-4) } });
+  const payment = await prisma.customVideoPayment.create({ data: { requestId: r.id, buyerId: user.id, creatorId: r.creatorId, ...split, reference, operator: input.operator, payerPhoneHint: input.phone.slice(-4) } });
   await prisma.customVideoRequest.update({ where: { id: r.id }, data: { status: 'PAYMENT_PENDING' } });
   let result;
-  try { result = await payments.initiate({ reference, amountFcfa: split.grossAmount, operator: input.operator, phone: input.phone, description: 'Vidéo personnalisée Face to Face' }); }
+  try { result = await payments.initiate({ reference, amount: split.grossAmount, currency: split.currency, operator: input.operator, phone: input.phone, description: 'Vidéo personnalisée Face to Face' }); }
   catch (e) { await prisma.customVideoPayment.update({ where: { id: payment.id }, data: { status: 'FAILED' } }); await prisma.customVideoRequest.update({ where: { id: r.id }, data: { status: 'AWAITING_PAYMENT' } }); throw e; }
   if (result.status === 'REJECTED') { await prisma.customVideoPayment.update({ where: { id: payment.id }, data: { status: 'FAILED', reviewReason: result.code } }); await prisma.customVideoRequest.update({ where: { id: r.id }, data: { status: 'AWAITING_PAYMENT' } }); throw new AppError(402, 'PAYMENT_FAILED', result.message || 'Le paiement a été refusé'); }
   if (result.status === 'ACCEPTED' && result.providerRef) await prisma.customVideoPayment.update({ where: { id: payment.id }, data: { externalRef: result.providerRef } });
@@ -82,7 +85,7 @@ export async function pay(user: User, id: string, input: { operator: MobileOpera
   return { httpStatus: 202 as const, request: view(now), payment: { id: payment.id, status: 'PENDING', reference } };
 }
 
-export async function settleCustomVideoPayment(reference: string, outcome: { status: 'SUCCESS'|'FAILED'; amountFcfa?: number; providerRef?: string; payload?: unknown }) {
+export async function settleCustomVideoPayment(reference: string, outcome: { status: 'SUCCESS'|'FAILED'; amount?: number; providerRef?: string; payload?: unknown }) {
   return prisma.$transaction(async tx => {
     const p = await tx.customVideoPayment.findUnique({ where: { reference }, include: { request: true } });
     if (!p) return 'unknown' as const;
@@ -90,11 +93,11 @@ export async function settleCustomVideoPayment(reference: string, outcome: { sta
     const payload = outcome.payload === undefined ? undefined : JSON.parse(JSON.stringify(outcome.payload));
     if (outcome.status === 'SUCCESS') {
       if (p.status === 'FAILED') { await tx.customVideoPayment.update({ where: { id: p.id }, data: { status: 'REVIEW', reviewReason: 'LATE_SUCCESS', providerPayload: payload } }); await tx.customVideoRequest.update({ where: { id: p.requestId }, data: { status: 'PAYMENT_REVIEW' } }); return 'review' as const; }
-      if (outcome.amountFcfa !== undefined && outcome.amountFcfa < p.grossFcfa) { await tx.customVideoPayment.update({ where: { id: p.id }, data: { status: 'REVIEW', reviewReason: 'AMOUNT_MISMATCH', providerPayload: payload } }); await tx.customVideoRequest.update({ where: { id: p.requestId }, data: { status: 'PAYMENT_REVIEW' } }); return 'review' as const; }
+      if (outcome.amount !== undefined && outcome.amount < p.grossAmount) { await tx.customVideoPayment.update({ where: { id: p.id }, data: { status: 'REVIEW', reviewReason: 'AMOUNT_MISMATCH', providerPayload: payload } }); await tx.customVideoRequest.update({ where: { id: p.requestId }, data: { status: 'PAYMENT_REVIEW' } }); return 'review' as const; }
       const r = await tx.customVideoPayment.updateMany({ where: { id: p.id, status: { in: ['PENDING','REVIEW'] } }, data: { status: 'PAID', paidAt: new Date(), providerPayload: payload, ...(outcome.providerRef ? { externalRef: outcome.providerRef } : {}) } });
       if (r.count !== 1) return 'already' as const;
       await tx.customVideoRequest.update({ where: { id: p.requestId }, data: { status: 'AWAITING_CREATOR' } });
-      await notify(tx, { userId: p.creatorId, type: 'CUSTOM_VIDEO_PAYMENT_CONFIRMED', actorId: p.buyerId, targetType: 'CUSTOM_VIDEO', targetId: p.requestId, amountFcfa: p.grossFcfa });
+      await notify(tx, { userId: p.creatorId, type: 'CUSTOM_VIDEO_PAYMENT_CONFIRMED', actorId: p.buyerId, targetType: 'CUSTOM_VIDEO', targetId: p.requestId, amount: p.grossAmount, currency: p.currency });
       return 'paid' as const;
     }
     const r = await tx.customVideoPayment.updateMany({ where: { id: p.id, status: { in: ['PENDING','REVIEW'] } }, data: { status: 'FAILED', providerPayload: payload } });
@@ -155,7 +158,7 @@ export async function complete(user: User, id: string) {
   if (r.status !== 'DELIVERED') throw conflict('INVALID_STATUS', 'La vidéo doit être livrée avant validation');
   const u = await prisma.customVideoRequest.update({ where: { id }, data: { status: 'COMPLETED', completedAt: new Date() }, include: { buyer: true, creator: true } });
   const p = await prisma.customVideoPayment.findFirst({ where: { requestId: id, status: 'PAID' }, orderBy: { createdAt: 'desc' } });
-  if (p) await recordCreatorEarning(prisma, { creatorId: p.creatorId, source: 'CUSTOM_VIDEO', sourceId: p.id, grossAmount: p.grossFcfa, currency: 'XAF', commissionBps: p.commissionBps, status: 'AVAILABLE' });
+  if (p) await recordCreatorEarning(prisma, { creatorId: p.creatorId, source: 'CUSTOM_VIDEO', sourceId: p.id, grossAmount: p.grossAmount, currency: p.currency, commissionBps: p.commissionBps, status: 'AVAILABLE' });
   await prisma.notification.create({ data: { userId: r.creatorId, type: 'CUSTOM_VIDEO_COMPLETED', actorId: user.id, targetType: 'CUSTOM_VIDEO', targetId: id } });
   return { request: view(u) };
 }

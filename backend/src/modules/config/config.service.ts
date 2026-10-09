@@ -1,7 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { badRequest, forbidden, notFound } from '../../utils/errors';
-import { isAdmin } from '../admin/admin.service';
+import { actorById, refuse, requirePermission, roleFor } from '../admin/roles';
+import { configPermissionFor, type AdminPermission } from '../admin/permissions';
 import { CONFIG_DEFAULTS } from './config.defaults';
 
 const VERSION_SEQUENCE = 'monetization_setting_version_seq';
@@ -11,8 +12,8 @@ export function formatRuleVersion(version: number) {
   return `CFG-${String(version).padStart(6, '0')}`;
 }
 
-export function assertConfigAdmin(userId: string) {
-  if (!isAdmin(userId)) throw forbidden('ADMIN_REQUIRED', 'Admin access required');
+export async function assertConfigAdmin(userId: string, perm: AdminPermission) {
+  requirePermission(await actorById(userId), perm);
 }
 
 function normalize(value: unknown, type: string): unknown {
@@ -129,7 +130,7 @@ export async function getCurrentRuleVersion(db: Prisma.TransactionClient | typeo
 }
 
 export async function listConfigVersions(userId: string, input: { key?: string; version?: number; limit?: number }) {
-  assertConfigAdmin(userId);
+  await assertConfigAdmin(userId, 'config.view');
   await ensureDefaults();
   return prisma.monetizationSettingVersion.findMany({
     where: {
@@ -143,7 +144,7 @@ export async function listConfigVersions(userId: string, input: { key?: string; 
 }
 
 export async function getConfigVersion(userId: string, version: number) {
-  assertConfigAdmin(userId);
+  await assertConfigAdmin(userId, 'config.view');
   await ensureDefaults();
   return prisma.monetizationSettingVersion.findMany({
     where: { version },
@@ -153,7 +154,7 @@ export async function getConfigVersion(userId: string, version: number) {
 }
 
 export async function listConfigs(userId: string, filters: { category?: string; enabled?: boolean; q?: string }) {
-  assertConfigAdmin(userId);
+  await assertConfigAdmin(userId, 'config.view');
   await ensureDefaults();
   return prisma.appConfig.findMany({
     where: {
@@ -166,7 +167,7 @@ export async function listConfigs(userId: string, filters: { category?: string; 
 }
 
 export async function getConfig(userId: string, key: string) {
-  assertConfigAdmin(userId);
+  await assertConfigAdmin(userId, 'config.view');
   await ensureDefaults();
   const item = await prisma.appConfig.findUnique({ where: { key } });
   if (!item) throw notFound('Configuration not found');
@@ -182,7 +183,7 @@ export async function getConfigValue<T = unknown>(key: string, fallback?: T, db:
 export async function upsertConfig(userId: string, input: {
   key: string; value: unknown; type: string; enabled: boolean; description: string; defaultValue: unknown; category: string; reason: string;
 }) {
-  assertConfigAdmin(userId);
+  await assertConfigAdmin(userId, configPermissionFor(input.category));
   if (!input.reason.trim()) throw badRequest('CONFIG_REASON_REQUIRED', 'Une raison est obligatoire pour modifier un paramètre');
   const value = normalize(input.value, input.type);
   const defaultValue = normalize(input.defaultValue, input.type);
@@ -236,7 +237,8 @@ export async function upsertConfig(userId: string, input: {
 }
 
 export async function updateConfig(userId: string, key: string, input: { value: unknown; enabled?: boolean; description?: string; reason: string }) {
-  assertConfigAdmin(userId);
+  const row = await prisma.appConfig.findUnique({ where: { key }, select: { category: true } });
+  await assertConfigAdmin(userId, configPermissionFor(row?.category ?? 'GENERAL'));
   if (!input.reason?.trim()) throw badRequest('CONFIG_REASON_REQUIRED', 'Une raison est obligatoire pour modifier un paramètre');
 
   return prisma.$transaction(async tx => {
@@ -277,7 +279,9 @@ export async function updateConfig(userId: string, key: string, input: { value: 
 }
 
 export async function restoreDefaults(userId: string) {
-  assertConfigAdmin(userId);
+  const actor = await actorById(userId);
+  if (roleFor(actor) !== 'SUPER_ADMIN') refuse(actor, 'SUPER_ADMIN_REQUIRED', 'Seul un super administrateur peut restaurer les valeurs par défaut', 'config.general.update', 'Restauration des valeurs par défaut');
+  await assertConfigAdmin(userId, 'config.general.update');
   await ensureDefaults();
   return prisma.$transaction(async tx => {
     const changes: Array<{ key: string; existing: any }> = [];

@@ -5,13 +5,14 @@ import { encodeCursor, idCursor, readIdCursor, readOffsetCursor } from '../../ut
 import { blockedIdsFor } from '../content/access';
 import { PUBLIC_AUTHOR_SELECT, serializeMany } from '../content/content.serializer';
 import { repo, type ContentWithAuthor, type Kind } from '../content/types';
-import { forYouScore, rank, trendingScore, type Signals } from './ranking';
+import { rank, type Signals } from './ranking';
+import { activeScoring } from './scoring';
 
 export type FeedTab = 'for-you' | 'following' | 'trending';
 const DAY = 86_400_000;
 
 /** Filtre commun : contenu publié, public (les « non répertoriés » n'apparaissent jamais dans un feed), auteur actif, aucun blocage dans un sens ou l'autre. */
-function baseWhere(blocked: string[], extra: Record<string, unknown> = {}) {
+export function baseWhere(blocked: string[], extra: Record<string, unknown> = {}) {
   return {
     status: 'PUBLISHED', visibility: 'PUBLIC', deletedAt: null,
     author: { status: 'ACTIVE', profileModerationStatus: 'ACTIVE' },
@@ -66,9 +67,10 @@ async function ranked(viewer: User, kind: Kind, tab: 'for-you' | 'trending', o: 
     take: env.FEED_CANDIDATES,
     include: { author: { select: PUBLIC_AUTHOR_SELECT } },
   });
+  const scoring = activeScoring();
   const score = tab === 'trending'
-    ? (c: ContentWithAuthor) => trendingScore({ ...c, publishedAt: c.publishedAt! }, now)
-    : await (async () => { const s = await signalsFor(viewer, kind, now); return (c: ContentWithAuthor) => forYouScore({ ...c, publishedAt: c.publishedAt! }, now, s); })();
+    ? (c: ContentWithAuthor) => scoring.trending({ ...c, publishedAt: c.publishedAt! }, now)
+    : await (async () => { const s = await signalsFor(viewer, kind, now); return (c: ContentWithAuthor) => scoring.forYou({ ...c, publishedAt: c.publishedAt! }, now, s); })();
   const sorted = rank(candidates.map((c) => ({ ...c, publishedAt: c.publishedAt! })), score as never) as ContentWithAuthor[];
   const page = sorted.slice(offset, offset + o.limit);
   return { items: await serializeMany(kind, page, viewer), nextCursor: offset + o.limit < sorted.length ? encodeCursor({ o: offset + o.limit }) : null };
@@ -78,3 +80,27 @@ export async function getFeed(viewer: User, tab: FeedTab, kind: Kind, o: { curso
   const blocked = await blockedIdsFor(viewer.id);
   return tab === 'following' ? following(viewer, kind, o, blocked) : ranked(viewer, kind, tab, o, blocked);
 }
+
+/**
+ * Feed local (étape 12) : contenus publiés de créateurs du pays demandé, classés par popularité (stratégie active).
+ * Même pagination par décalage que « Tendances ».
+ */
+export async function getLocalFeed(viewer: User, kind: Kind, country: string, o: { cursor?: string; limit: number }) {
+  const now = new Date();
+  const blocked = await blockedIdsFor(viewer.id);
+  const offset = readOffsetCursor(o.cursor);
+  const candidates: ContentWithAuthor[] = await repo(prisma, kind).findMany({
+    where: {
+      ...baseWhere([...blocked, viewer.id], { publishedAt: { gte: new Date(now.getTime() - 30 * DAY) } }),
+      author: { status: 'ACTIVE', profileModerationStatus: 'ACTIVE', country },
+    },
+    orderBy: [{ viewCount: 'desc' }, { id: 'desc' }],
+    take: env.FEED_CANDIDATES,
+    include: { author: { select: PUBLIC_AUTHOR_SELECT } },
+  });
+  const scoring = activeScoring();
+  const sorted = rank(candidates.map((c) => ({ ...c, publishedAt: c.publishedAt! })), (c) => scoring.trending(c, now)) as ContentWithAuthor[];
+  const page = sorted.slice(offset, offset + o.limit);
+  return { items: await serializeMany(kind, page, viewer), nextCursor: offset + o.limit < sorted.length ? encodeCursor({ o: offset + o.limit }) : null };
+}
+

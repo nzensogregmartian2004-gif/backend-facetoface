@@ -46,7 +46,12 @@ export async function transcodeToHls(input: string, sourceWidth: number, sourceH
   }
 }
 
-export async function generateThumbnail(input: string, output: string) { await run('ffmpeg', ['-y','-ss','00:00:01','-i',input,'-frames:v','1','-vf','scale=640:-2','-q:v','4',output]); }
+export async function generateThumbnail(input: string, output: string, atSeconds = 1) { await run('ffmpeg', ['-y','-ss',atSeconds.toFixed(3),'-i',input,'-frames:v','1','-vf','scale=640:-2','-q:v','4',output]); }
+
+/** Découpe précise (ré-encodage) : part de `startSec`, dure `lengthSec`. Le fichier de sortie est prêt pour le réseau (faststart). */
+export async function trimVideo(input: string, output: string, startSec: number, lengthSec: number) {
+  await run('ffmpeg', ['-y','-i',input,'-ss',startSec.toFixed(3),'-t',lengthSec.toFixed(3),'-c:v','libx264','-preset','veryfast','-crf','23','-c:a','aac','-b:a','128k','-movflags','+faststart',output]);
+}
 
 export async function cleanupTranscodeDir(dir: string) { await fs.rm(dir, { recursive:true, force:true }); }
 export async function listFiles(dir: string) { return fs.readdir(dir, {recursive:true, withFileTypes:true}).then(xs => xs.filter(x=>x.isFile()).map(x=>path.relative(dir, path.join(x.parentPath ?? dir, x.name)))); }

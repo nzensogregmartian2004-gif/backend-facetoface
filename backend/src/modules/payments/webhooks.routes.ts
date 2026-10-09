@@ -47,7 +47,7 @@ webhooksRouter.post('/mypvit/callback/:token', webhookLimiter, guard, wrap(async
   const b = parsed.data;
   const status = b.status.toUpperCase() === 'SUCCESS' ? 'SUCCESS' : 'FAILED'; // tout ce qui n'est pas un succès net est un échec : on ne crédite jamais sur une ambiguïté
   // En cas d'erreur de traitement, l'exception remonte (500) : le callback est idempotent, un renvoi par MyPVit est sans danger.
-  const result = await settleReference(b.merchantReferenceId, { status, amountFcfa: b.amount, providerRef: b.transactionId, payload: b });
+  const result = await settleReference(b.merchantReferenceId, { status, amount: b.amount, providerRef: b.transactionId, payload: b });
   if (result === 'unknown') console.warn(`[webhook] référence inconnue : ${b.merchantReferenceId}`);
   res.status(200).json({ transactionId: b.transactionId, responseCode: b.code });
 }));

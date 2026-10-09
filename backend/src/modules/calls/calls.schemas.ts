@@ -1,3 +1,4 @@
+import { currencySchema } from '../../utils/currency';
 import { z } from 'zod';
 
 const operator = z.enum(['AIRTEL_MONEY', 'MOOV_MONEY'], { message: 'Choisissez un opérateur' });
@@ -15,8 +16,9 @@ export const requestCallSchema = z.object({
 
 export const callSettingsSchema = z.object({
   pricingMode: z.enum(['PER_MINUTE', 'PER_SESSION'], { message: 'Mode de tarification invalide' }).optional(),
-  audioPriceFcfa: z.number().int('Montant entier en FCFA').min(1, 'Montant invalide').nullable().optional(),
-  videoPriceFcfa: z.number().int('Montant entier en FCFA').min(1, 'Montant invalide').nullable().optional(),
+  currency: currencySchema.optional(),
+  audioPrice: z.number().int('Montant entier (unités mineures)').min(1, 'Montant invalide').nullable().optional(),
+  videoPrice: z.number().int('Montant entier (unités mineures)').min(1, 'Montant invalide').nullable().optional(),
   maxDurationMinutes: z.number().int('Nombre entier de minutes').min(1, 'Durée invalide').max(1000, 'Durée invalide').optional(),
   access: z.enum(['EVERYONE', 'FOLLOWERS', 'SUBSCRIBERS'], { message: "Type d'accès invalide" }).optional(),
   isAvailable: z.boolean().optional(),

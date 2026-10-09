@@ -1,13 +1,14 @@
 import type { Prisma, User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { forbidden, badRequest, notFound } from '../../utils/errors';
-import { isAdmin } from '../admin/admin.service';
+import { requirePermission } from '../admin/roles';
+import type { AdminPermission } from '../admin/permissions';
 
-export type ModerationTarget = 'USER'|'VIDEO'|'SHORT'|'LIVE'|'COMMENT'|'MESSAGE'|'PAID_CONTENT';
+export type ModerationTarget = 'USER'|'GROUP'|'VIDEO'|'SHORT'|'LIVE'|'COMMENT'|'MESSAGE'|'PAID_CONTENT';
 export type ModerationAction = 'WARNING'|'HIDE'|'UNHIDE'|'REMOVE'|'RESTORE'|'SUSPEND'|'BAN'|'UNSUSPEND'|'UNBAN'|'DISABLE_MONETIZATION'|'ENABLE_MONETIZATION';
 
-function assertAdmin(userId: string) {
-  if (!isAdmin(userId)) throw forbidden('ADMIN_REQUIRED', 'Droits administrateur requis');
+function assertAdmin(user: User, p: AdminPermission) {
+  requirePermission(user, p);
 }
 
 const reasonRequired = (reason?: string) => {
@@ -19,6 +20,7 @@ const reasonRequired = (reason?: string) => {
 function targetField(type: ModerationTarget, id: string): Prisma.ModerationActionCreateInput {
   const base: any = { targetType: type, targetId: id };
   if (type === 'USER') base.targetUser = { connect: { id } };
+  if (type === 'GROUP') base.targetConversation = { connect: { id } };
   if (type === 'VIDEO' || type === 'PAID_CONTENT') base.targetVideo = { connect: { id } };
   if (type === 'SHORT') base.targetShort = { connect: { id } };
   if (type === 'LIVE') base.targetLive = { connect: { id } };
@@ -31,6 +33,11 @@ async function assertTarget(type: ModerationTarget, id: string) {
   if (type === 'USER') {
     const row = await prisma.user.findUnique({ where: { id }, select: { id: true, status: true } });
     if (!row) throw notFound('Utilisateur introuvable');
+    return row;
+  }
+  if (type === 'GROUP') {
+    const row = await prisma.conversation.findUnique({ where: { id }, select: { id: true, isGroup: true } });
+    if (!row?.isGroup) throw notFound('Groupe introuvable');
     return row;
   }
   if (type === 'VIDEO') {
@@ -69,7 +76,7 @@ async function assertTarget(type: ModerationTarget, id: string) {
 }
 
 export async function moderate(admin: User, type: ModerationTarget, id: string, action: ModerationAction, reason: string, reportId?: string) {
-  assertAdmin(admin.id);
+  assertAdmin(admin, 'moderation.content.moderate');
   const why = reasonRequired(reason);
   const target: any = await assertTarget(type, id);
   if (type === 'USER' && ['SUSPEND','BAN'].includes(action) && target.id === admin.id) throw badRequest('CANNOT_MODERATE_SELF', 'Un administrateur ne peut pas se sanctionner lui-même');
@@ -132,6 +139,6 @@ export async function moderate(admin: User, type: ModerationTarget, id: string, 
 }
 
 export async function listActions(admin: User, input: { targetType?: ModerationTarget; targetId?: string; limit: number }) {
-  assertAdmin(admin.id);
+  assertAdmin(admin, 'moderation.reports.view');
   return prisma.moderationAction.findMany({ where: { ...(input.targetType ? { targetType: input.targetType } : {}), ...(input.targetId ? { targetId: input.targetId } : {}) }, orderBy: { createdAt: 'desc' }, take: input.limit });
 }

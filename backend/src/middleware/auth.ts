@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { attachAdminContext } from '../modules/admin/adminContext';
 import type { User } from '@prisma/client';
 import { prisma } from '../config/db';
 import { forbidden, unauthorized } from '../utils/errors';
@@ -24,6 +25,7 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
       throw unauthorized('SESSION_REVOKED', 'Session expirée ou révoquée');
     }
     if (session.user.status !== 'ACTIVE') throw forbidden('ACCOUNT_NOT_ACTIVE', 'Ce compte est suspendu ou désactivé');
+    await attachAdminContext(session.user);
     req.auth = { user: session.user, sessionId: session.id };
     next();
   } catch (e) {

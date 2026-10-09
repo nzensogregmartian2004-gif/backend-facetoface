@@ -4,27 +4,30 @@ import { toDateOnly } from './dates';
 /** Données du compte, visibles uniquement par son propriétaire. */
 export const serializeSelf = (u: User) => ({
   id: u.id,
+  isCertified: u.certificationStatus === 'CERTIFIED',
   email: u.email,
   username: u.username,
   displayName: u.displayName,
   avatarUrl: u.avatarUrl,
+  bannerUrl: u.bannerUrl,
   bio: u.bio,
   country: u.country,
   links: u.links,
-  birthDate: toDateOnly(u.birthDate),
+  birthDate: u.birthDate ? toDateOnly(u.birthDate) : null,
   isCreator: u.isCreator,
   emailVerified: !!u.emailVerifiedAt,
   preferredLanguage: u.preferredLanguage,
   preferredCurrency: u.preferredCurrency,
-  privacy: { profileVisibility: u.profileVisibility, allowMessagesFrom: u.allowMessagesFrom, showOnlineStatus: u.showOnlineStatus },
+  privacy: { profileVisibility: u.profileVisibility, allowMessagesFrom: u.allowMessagesFrom, showOnlineStatus: u.showOnlineStatus, showReadReceipts: u.showReadReceipts },
   createdAt: u.createdAt,
 });
 
 /** Profil public : jamais d'e-mail, de date de naissance ni de statut. */
-export const serializePublic = (u: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'bio' | 'country' | 'links' | 'isCreator' | 'profileVisibility' | 'createdAt'>, opts: { blockedByMe?: boolean } = {}) => {
+export const serializePublic = (u: Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'bio' | 'country' | 'links' | 'isCreator' | 'profileVisibility' | 'createdAt' | 'certificationStatus'>, opts: { blockedByMe?: boolean } = {}) => {
   const limited = u.profileVisibility === 'PRIVATE';
   return {
     id: u.id,
+    isCertified: u.certificationStatus === 'CERTIFIED',
     username: u.username,
     displayName: u.displayName,
     avatarUrl: u.avatarUrl,

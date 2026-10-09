@@ -6,7 +6,7 @@ import { parse } from '../../utils/validate';
 import { currencyQuerySchema } from './monetization.schemas';
 import * as svc from './monetization.service';
 import * as views from './views.service';
-import { isAdmin } from '../admin/admin.service';
+import { requirePermission } from '../admin/roles';
 import { adRevenueSchema, poolPeriodSchema, poolSettingSchema, monetizationConditionUpdateSchema } from './monetization.schemas';
 import * as eligibility from './eligibility.service';
 
@@ -30,28 +30,28 @@ monetizationRouter.get('/conditions', wrap(async (_req, res) => {
 }));
 
 monetizationRouter.post('/admin/view-revenue', wrap(async (req, res) => {
-  if (!isAdmin(me(req).id)) return res.status(403).json({ error: { code: 'ADMIN_REQUIRED', message: 'Droits administrateur requis' } });
+  requirePermission(me(req), 'finance.revenue.view');
   res.status(201).json({ revenue: await views.recordAdvertisingRevenue(adRevenueSchema.parse(req.body)) });
 }));
 
 monetizationRouter.post('/admin/view-pool/allocate', wrap(async (req, res) => {
-  if (!isAdmin(me(req).id)) return res.status(403).json({ error: { code: 'ADMIN_REQUIRED', message: 'Droits administrateur requis' } });
+  requirePermission(me(req), 'finance.creator_rules.update');
   const p = poolPeriodSchema.parse(req.body);
   res.json({ pool: await views.allocateCreatorPool(p.start, p.end, p.currency) });
 }));
 
 monetizationRouter.patch('/admin/view-pool/settings', wrap(async (req, res) => {
-  if (!isAdmin(me(req).id)) return res.status(403).json({ error: { code: 'ADMIN_REQUIRED', message: 'Droits administrateur requis' } });
+  requirePermission(me(req), 'finance.creator_rules.update');
   const p = poolSettingSchema.parse(req.body);
   res.json({ setting: await views.setViewMonetizationSetting(p.key, p.value, me(req).id, p.reason) });
 }));
 monetizationRouter.patch('/admin/conditions', wrap(async (req, res) => {
-  if (!isAdmin(me(req).id)) return res.status(403).json({ error: { code: 'ADMIN_REQUIRED', message: 'Droits administrateur requis' } });
+  requirePermission(me(req), 'finance.creator_rules.update');
   const p = monetizationConditionUpdateSchema.parse(req.body);
   res.json({ setting: await eligibility.setMonetizationCondition(p.key, p.value, me(req).id, p.reason) });
 }));
 monetizationRouter.post('/admin/creator/:creatorId/eligibility-review', wrap(async (req, res) => {
-  if (!isAdmin(me(req).id)) return res.status(403).json({ error: { code: 'ADMIN_REQUIRED', message: 'Droits administrateur requis' } });
+  requirePermission(me(req), 'creators.eligibility.review');
   const status = z.object({ status: z.enum(['APPROVED', 'REJECTED']), rejectionReason: z.string().trim().max(500).optional() }).parse(req.body);
   res.json({ eligibility: await eligibility.reviewCreatorEligibility(req.params.creatorId, status.status, me(req).id, status.rejectionReason) });
 }));

@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { billCall, prepaidAmount, type BillingInput } from '../src/modules/calls/calls.billing';
 import { signLivekitToken } from '../src/utils/callProvider';
 
-const perMinute = (over: Partial<BillingInput> = {}): BillingInput => ({ pricingMode: 'PER_MINUTE', unitPriceFcfa: 500, requestedMinutes: 10, grossFcfa: 5000, commissionBps: 2000, ...over });
-const perSession = (over: Partial<BillingInput> = {}): BillingInput => ({ pricingMode: 'PER_SESSION', unitPriceFcfa: 8000, requestedMinutes: 30, grossFcfa: 8000, commissionBps: 2000, ...over });
+const perMinute = (over: Partial<BillingInput> = {}): BillingInput => ({ pricingMode: 'PER_MINUTE', unitPrice: 500, requestedMinutes: 10, grossAmount: 5000, commissionBps: 2000, ...over });
+const perSession = (over: Partial<BillingInput> = {}): BillingInput => ({ pricingMode: 'PER_SESSION', unitPrice: 8000, requestedMinutes: 30, grossAmount: 8000, commissionBps: 2000, ...over });
 
 describe('prepaidAmount', () => {
   it('par minute = prix × minutes ; par session = prix de la session', () => {
@@ -15,27 +15,27 @@ describe('prepaidAmount', () => {
 
 describe('billCall — par minute', () => {
   it('toute minute commencée est due', () => {
-    expect(billCall(perMinute(), 61, 10)).toMatchObject({ billedMinutes: 2, consumedFcfa: 1000, refundFcfa: 4000, commissionFcfa: 200, creatorFcfa: 800 });
-    expect(billCall(perMinute(), 60, 10)).toMatchObject({ billedMinutes: 1, consumedFcfa: 500 });
-    expect(billCall(perMinute(), 125, 10)).toMatchObject({ billedMinutes: 3, consumedFcfa: 1500, refundFcfa: 3500, commissionFcfa: 300, creatorFcfa: 1200 });
+    expect(billCall(perMinute(), 61, 10)).toMatchObject({ billedMinutes: 2, consumedAmount: 1000, refundAmount: 4000, commissionAmount: 200, creatorAmount: 800 });
+    expect(billCall(perMinute(), 60, 10)).toMatchObject({ billedMinutes: 1, consumedAmount: 500 });
+    expect(billCall(perMinute(), 125, 10)).toMatchObject({ billedMinutes: 3, consumedAmount: 1500, refundAmount: 3500, commissionAmount: 300, creatorAmount: 1200 });
   });
   it('plafonné aux minutes prépayées, jamais plus que le prépayé', () => {
-    expect(billCall(perMinute(), 600, 10)).toMatchObject({ billedMinutes: 10, consumedFcfa: 5000, refundFcfa: 0 });
-    expect(billCall(perMinute(), 99_999, 10)).toMatchObject({ billedMinutes: 10, consumedFcfa: 5000, refundFcfa: 0 });
+    expect(billCall(perMinute(), 600, 10)).toMatchObject({ billedMinutes: 10, consumedAmount: 5000, refundAmount: 0 });
+    expect(billCall(perMinute(), 99_999, 10)).toMatchObject({ billedMinutes: 10, consumedAmount: 5000, refundAmount: 0 });
   });
   it('coupure immédiate (sous le seuil facturable) : rien de consommé, tout à rembourser', () => {
-    expect(billCall(perMinute(), 9, 10)).toEqual({ consumedFcfa: 0, refundFcfa: 5000, commissionFcfa: 0, creatorFcfa: 0, billedMinutes: 0 });
-    expect(billCall(perMinute(), 0, 0)).toEqual({ consumedFcfa: 0, refundFcfa: 5000, commissionFcfa: 0, creatorFcfa: 0, billedMinutes: 0 });
-    expect(billCall(perMinute(), 10, 10).consumedFcfa).toBe(500);
+    expect(billCall(perMinute(), 9, 10)).toEqual({ consumedAmount: 0, refundAmount: 5000, commissionAmount: 0, creatorAmount: 0, billedMinutes: 0 });
+    expect(billCall(perMinute(), 0, 0)).toEqual({ consumedAmount: 0, refundAmount: 5000, commissionAmount: 0, creatorAmount: 0, billedMinutes: 0 });
+    expect(billCall(perMinute(), 10, 10).consumedAmount).toBe(500);
   });
 });
 
 describe('billCall — par session', () => {
   it('la session est due en entier dès qu’elle a réellement commencé', () => {
-    expect(billCall(perSession(), 15, 10)).toMatchObject({ billedMinutes: 30, consumedFcfa: 8000, refundFcfa: 0, commissionFcfa: 1600, creatorFcfa: 6400 });
+    expect(billCall(perSession(), 15, 10)).toMatchObject({ billedMinutes: 30, consumedAmount: 8000, refundAmount: 0, commissionAmount: 1600, creatorAmount: 6400 });
   });
   it('rien n’est dû si l’appel a été coupé tout de suite', () => {
-    expect(billCall(perSession(), 3, 10)).toMatchObject({ consumedFcfa: 0, refundFcfa: 8000, creatorFcfa: 0 });
+    expect(billCall(perSession(), 3, 10)).toMatchObject({ consumedAmount: 0, refundAmount: 8000, creatorAmount: 0 });
   });
 });
 
@@ -46,13 +46,13 @@ describe('billCall — invariants (entiers FCFA)', () => {
       for (const unit of [100, 150, 333, 1000, 99_999]) {
         for (const minutes of [1, 2, 7, 30]) {
           for (const seconds of [0, 5, 10, 59, 60, 61, 119, 120, 599, 1800, 5000]) {
-            const input = perMinute({ unitPriceFcfa: unit, requestedMinutes: minutes, grossFcfa: unit * minutes, commissionBps: bps });
+            const input = perMinute({ unitPrice: unit, requestedMinutes: minutes, grossAmount: unit * minutes, commissionBps: bps });
             const b = billCall(input, seconds, 10);
-            expect(b.consumedFcfa + b.refundFcfa).toBe(input.grossFcfa);
-            expect(b.commissionFcfa + b.creatorFcfa).toBe(b.consumedFcfa);
-            expect(b.consumedFcfa).toBeGreaterThanOrEqual(0);
-            expect(b.refundFcfa).toBeGreaterThanOrEqual(0);
-            expect(Number.isInteger(b.commissionFcfa) && Number.isInteger(b.creatorFcfa)).toBe(true);
+            expect(b.consumedAmount + b.refundAmount).toBe(input.grossAmount);
+            expect(b.commissionAmount + b.creatorAmount).toBe(b.consumedAmount);
+            expect(b.consumedAmount).toBeGreaterThanOrEqual(0);
+            expect(b.refundAmount).toBeGreaterThanOrEqual(0);
+            expect(Number.isInteger(b.commissionAmount) && Number.isInteger(b.creatorAmount)).toBe(true);
             n++;
           }
         }

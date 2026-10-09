@@ -5,6 +5,10 @@ import { prisma } from './config/db';
 import { env } from './config/env';
 import { startCallSweeper } from './modules/calls/calls.service';
 import { startReconciler } from './modules/payments/reconcile';
+import { startViewOnceSweeper } from './modules/messages/viewOnce.sweeper';
+import { startDisappearingSweeper } from './modules/messages/disappearing.sweeper';
+import { initPresence } from './modules/messages/presence';
+import { startStorySweeper } from './modules/stories/stories.service';
 
 const server = createServer(createApp());
 attachRealtime(server);
@@ -15,6 +19,10 @@ server.listen(env.PORT, () => console.log(`Face to Face API — ${env.PUBLIC_BAS
 
 startReconciler(); // rapprochement des paiements restés PENDING (aucun effet avec PAYMENT_DRIVER=none)
 startCallSweeper(); // sonneries expirées et durées maximales atteintes (aucun effet avec CALL_PROVIDER=none)
+startViewOnceSweeper(); // purge des médias des messages à vue unique déjà ouverts (après la période de grâce)
+startDisappearingSweeper(); // suppression du contenu des messages éphémères arrivés à échéance
+initPresence(); // présence en ligne et saisie, branchées sur le temps réel
+startStorySweeper(); // suppression des stories arrivées à échéance (fichier compris)
 
 // Arrêt propre (déploiement, redémarrage) : on cesse d'accepter, on laisse finir les requêtes en cours
 // (notamment les écritures financières), puis on ferme la base. Plafond de 25 s avant arrêt forcé.

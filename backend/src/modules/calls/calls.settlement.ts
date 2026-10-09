@@ -4,6 +4,7 @@ import { MOBILE_OPERATORS, payments, type MobileOperator } from '../../utils/pay
 import type { SettleOutcome, SettleResult } from '../payments/settlement';
 import { lockUser } from './calls.lock';
 import { publishRealtime } from '../../realtime/realtime';
+import { notify } from '../notifications/notifications.service';
 
 const json = (v: unknown) => (v === undefined ? undefined : (JSON.parse(JSON.stringify(v)) as object));
 
@@ -29,9 +30,9 @@ export async function settleCallPayment(reference: string, o: SettleOutcome): Pr
         console.error(`[paiement] succès tardif sur un appel échoué (réf ${reference}) : vérification manuelle / remboursement requis`);
         return 'review';
       }
-      if (o.amountFcfa !== undefined && o.amountFcfa < c.grossFcfa) {
+      if (o.amount !== undefined && o.amount < c.grossAmount) {
         await tx.call.updateMany({ where: { id: c.id, paymentStatus: { in: ['PENDING', 'REVIEW'] } }, data: { paymentStatus: 'REVIEW', reviewReason: 'AMOUNT_MISMATCH', status: 'PAYMENT_FAILED', providerPayload: payload } });
-        console.error(`[paiement] montant confirmé (${o.amountFcfa}) inférieur au prix (${c.grossFcfa}) pour l'appel de réf ${reference} : vérification manuelle`);
+        console.error(`[paiement] montant confirmé (${o.amount}) inférieur au prix (${c.grossAmount}) pour l'appel de réf ${reference} : vérification manuelle`);
         return 'review';
       }
       await lockUser(tx, c.calleeId); // sérialise les paiements simultanés vers un même créateur
@@ -40,7 +41,7 @@ export async function settleCallPayment(reference: string, o: SettleOutcome): Pr
       const busy = !stale && (await tx.call.count({ where: { id: { not: c.id }, status: { in: ['RINGING', 'ACTIVE'] }, OR: [{ calleeId: c.calleeId }, { callerId: c.calleeId }] } })) > 0;
       const paid = { paymentStatus: 'PAID' as const, paidAt: now, reviewReason: null, providerPayload: payload, ...(o.providerRef ? { externalRef: o.providerRef } : {}) };
       const next = stale || busy
-        ? { status: 'MISSED' as const, endReason: stale ? ('STALE_PAYMENT' as const) : ('CREATOR_BUSY' as const), endedAt: now, consumedFcfa: 0, commissionFcfa: 0, creatorFcfa: 0, refundFcfa: c.grossFcfa, refundStatus: 'DUE' as const }
+        ? { status: 'MISSED' as const, endReason: stale ? ('STALE_PAYMENT' as const) : ('CREATOR_BUSY' as const), endedAt: now, consumedAmount: 0, commissionAmount: 0, creatorAmount: 0, refundAmount: c.grossAmount, refundStatus: 'DUE' as const }
         : { status: 'RINGING' as const, ringExpiresAt: new Date(now.getTime() + env.CALL_RING_SECONDS * 1000) };
       const r = await tx.call.updateMany({ where: { id: c.id, paymentStatus: { in: ['PENDING', 'REVIEW'] } }, data: { ...paid, ...next } });
       return r.count === 1 ? 'paid' : 'already';
@@ -50,6 +51,14 @@ export async function settleCallPayment(reference: string, o: SettleOutcome): Pr
     const r = await tx.call.updateMany({ where: { id: c.id, paymentStatus: { in: ['PENDING', 'REVIEW'] } }, data: { paymentStatus: 'FAILED', status: 'PAYMENT_FAILED', reviewReason: null, providerPayload: payload } });
     return r.count === 1 ? 'failed' : 'already';
   });
+  if (result === 'paid') {
+    const call = await prisma.call.findUnique({ where: { reference }, select: { id: true, callerId: true, calleeId: true, type: true } });
+    if (call) {
+      const payload = { callId: call.id, type: 'CALL_INCOMING' as const };
+      publishRealtime(call.calleeId, { type: 'CALL_INCOMING', payload });
+      await notify(prisma, { userId: call.calleeId, type: 'CALL_INCOMING', actorId: call.callerId, targetType: 'CALL', targetId: call.id, pushPayload: payload });
+    }
+  }
   return result;
 }
 

@@ -12,7 +12,8 @@ export function serializeCall<O>(c: Call, viewer: User, other: O, now = new Date
     other,
     type: c.type,
     pricingMode: c.pricingMode,
-    unitPriceFcfa: c.unitPriceFcfa,
+    currency: c.currency,
+    unitPrice: c.unitPrice,
     requestedMinutes: c.requestedMinutes,
     status: c.status,
     endReason: c.endReason,
@@ -25,8 +26,8 @@ export function serializeCall<O>(c: Call, viewer: User, other: O, now = new Date
     /** Temps restant d'un appel en cours (le mobile s'en sert comme minuteur ; le serveur reste l'autorité). */
     remainingSeconds: c.status === 'ACTIVE' && c.endsAt ? Math.max(0, Math.ceil((c.endsAt.getTime() - now.getTime()) / 1000)) : null,
     money: mine
-      ? { prepaidFcfa: c.grossFcfa, consumedFcfa: c.consumedFcfa, refundFcfa: c.refundFcfa, refundStatus: c.refundStatus }
-      : { consumedFcfa: c.consumedFcfa, commissionFcfa: c.commissionFcfa, creatorFcfa: c.creatorFcfa, commissionBps: c.commissionBps },
+      ? { currency: c.currency, prepaid: c.grossAmount, consumed: c.consumedAmount, refund: c.refundAmount, refundStatus: c.refundStatus }
+      : { currency: c.currency, consumed: c.consumedAmount, commission: c.commissionAmount, creatorNet: c.creatorAmount, commissionBps: c.commissionBps },
     dispute: c.disputedAt ? { at: c.disputedAt, reason: c.disputeReason } : null,
     createdAt: c.createdAt,
   };

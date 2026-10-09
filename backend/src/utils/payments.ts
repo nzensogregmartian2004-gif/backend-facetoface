@@ -1,3 +1,4 @@
+import { operatorsForCountry } from '../modules/geo/geo.service';
 import { env } from '../config/env';
 import { AppError } from './errors';
 import { MypvitGateway, isOperatorConfigured } from '../modules/payments/mypvit.gateway';
@@ -10,23 +11,27 @@ import { MypvitGateway, isOperatorConfigured } from '../modules/payments/mypvit.
  * Pilotes : `none` (503 : rien ne part), `memory` (tests), `mypvit` (Airtel Money, Moov Money).
  * ÉTAPE 13 : portefeuille, retraits, remboursements — derrière ce même port.
  */
-export type MobileOperator = 'AIRTEL_MONEY' | 'MOOV_MONEY';
+export type MobileOperator = 'AIRTEL_MONEY' | 'MOOV_MONEY' | 'VISA' | 'MASTERCARD';
 export const MOBILE_OPERATORS: readonly MobileOperator[] = ['AIRTEL_MONEY', 'MOOV_MONEY'];
+export const CARD_OPERATORS: readonly MobileOperator[] = ['VISA', 'MASTERCARD'];
+export const PAYMENT_OPERATORS: readonly MobileOperator[] = [...MOBILE_OPERATORS, ...CARD_OPERATORS];
 
-export type InitiateRequest = { reference: string; amountFcfa: number; operator: MobileOperator; phone: string; description: string };
+export type InitiateRequest = { reference: string; amount: number; currency: string; operator: MobileOperator; /** Numéro MSISDN pour Mobile Money ou identifiant client fourni par le flux carte MPVIT. */ phone: string; description: string };
 export type InitiateResult =
   | { status: 'ACCEPTED'; providerRef: string | null }
   /** Refus net du prestataire : aucun débit. L'achat passe en FAILED et peut être retenté. */
   | { status: 'REJECTED'; code: string; message: string }
   /** La demande est partie mais la réponse est perdue (délai dépassé, erreur serveur) : le client a PEUT-ÊTRE été débité. L'achat reste PENDING ; aucun nouvel essai tant que ce n'est pas tranché. */
-  | { status: 'UNCERTAIN' };
+  | { status: 'UNCERTAIN' }
+  /** Carte : le client doit ouvrir cette page de paiement MyPVit ; le statut final arrive par webhook. */
+  | { status: 'REDIRECT'; url: string; providerRef: string | null };
 
 export type RemoteStatus = 'SUCCESS' | 'FAILED' | 'PENDING';
 
 export interface PaymentGateway {
   readonly name: string;
   /** Opérateurs réellement utilisables sur ce serveur. */
-  operators(): MobileOperator[];
+  operators(country?: string | null): MobileOperator[];
   /** Lève une AppError uniquement si RIEN n'a été envoyé au prestataire (non configuré, clé secrète indisponible…). */
   initiate(req: InitiateRequest): Promise<InitiateResult>;
   /** État chez le prestataire, ou null si inconnu (API de statut absente ou réponse ambiguë : jamais de supposition). */
@@ -35,7 +40,7 @@ export interface PaymentGateway {
 
 export class UnconfiguredPayments implements PaymentGateway {
   readonly name = 'none';
-  operators(): MobileOperator[] { return []; }
+  operators(_country?: string | null): MobileOperator[] { return []; }
   async initiate(): Promise<InitiateResult> {
     throw new AppError(503, 'PAYMENTS_NOT_CONFIGURED', 'Les paiements ne sont pas encore configurés sur ce serveur');
   }
@@ -54,7 +59,10 @@ export class MemoryPayments implements PaymentGateway {
   notSentNext() { this.plan.push('not-sent'); }
   setStatus(reference: string, s: RemoteStatus | null) { this.statuses.set(reference, s); }
   clear() { this.requests = []; this.plan = []; this.statuses.clear(); this.checks = []; }
-  operators(): MobileOperator[] { return [...MOBILE_OPERATORS]; }
+  operators(country?: string | null): MobileOperator[] {
+    const allowed = operatorsForCountry(country);
+    return allowed ? MOBILE_OPERATORS.filter((o) => (allowed as string[]).includes(o)) : [...MOBILE_OPERATORS];
+  }
   async initiate(req: InitiateRequest): Promise<InitiateResult> {
     const step = this.plan.shift() ?? 'ok';
     if (step === 'not-sent') throw new AppError(502, 'PAYMENT_PROVIDER_ERROR', 'Le prestataire de paiement est indisponible, réessayez');

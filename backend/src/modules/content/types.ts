@@ -8,7 +8,7 @@ export type DbClient = PrismaClient | Prisma.TransactionClient;
 export type ContentRow = {
   id: string; authorId: string; title: string; description: string | null; category: string;
   visibility: 'PUBLIC' | 'UNLISTED' | 'PRIVATE'; status: 'DRAFT' | 'PUBLISHED' | 'HIDDEN' | 'REMOVED';
-  allowDownload: boolean; subscriptionOnly: boolean; allowComments: boolean;
+  allowDownload: boolean; subscriptionOnly: boolean; allowComments: boolean; price: number | null; currency: string | null;
   videoKey: string | null; thumbnailKey: string | null; mimeType: string | null; sizeBytes: number | null;
   durationSeconds: number | null; width: number | null; height: number | null;
   uploadedAt: Date | null; publishedAt: Date | null;
@@ -16,7 +16,7 @@ export type ContentRow = {
   createdAt: Date; updatedAt: Date; deletedAt: Date | null;
   processingStatus: 'PENDING' | 'PROCESSING' | 'READY' | 'FAILED'; processingError: string | null; processedAt: Date | null; manifestKey: string | null;
 };
-export type PublicAuthor = Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'bio' | 'country' | 'links' | 'isCreator' | 'profileVisibility' | 'createdAt'>;
+export type PublicAuthor = Pick<User, 'id' | 'username' | 'displayName' | 'avatarUrl' | 'bio' | 'country' | 'links' | 'isCreator' | 'profileVisibility' | 'createdAt' | 'certificationStatus'>;
 export type ContentWithAuthor = ContentRow & { author: User };
 export type ContentWithPublicAuthor = ContentRow & { author: PublicAuthor };
 

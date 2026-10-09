@@ -12,7 +12,7 @@ describe('Étape 23 — créateurs et paiements', () => {
     const fan = await signedIn(2);
 
     const plan = await api().put('/api/subscriptions/me/plan').set(creator.auth).send({
-      priceFcfa: 1000,
+      price: 1000,
       benefits: { exclusiveContent: true, directMessages: true },
       isActive: true,
     });
@@ -30,7 +30,7 @@ describe('Étape 23 — créateurs et paiements', () => {
     });
     const earning = await prisma.creatorEarning.findFirst({ where: { sourceId: payment.id } });
 
-    expect(payment).toMatchObject({ status: 'PAID', grossFcfa: 1000, commissionFcfa: 200, creatorFcfa: 800, commissionBps: 2000 });
+    expect(payment).toMatchObject({ status: 'PAID', grossAmount: 1000, commissionAmount: 200, creatorAmount: 800, commissionBps: 2000 });
     expect(subscription.status).toBe('ACTIVE');
     expect(earning).toMatchObject({ grossAmount: 1000, creatorAmount: 800, platformFeeAmount: 200, status: 'AVAILABLE' });
   });
@@ -44,7 +44,7 @@ describe('Étape 23 — créateurs et paiements', () => {
     expect(created.status).toBe(201);
     const id = created.body.request.id as string;
 
-    expect((await api().post(`/api/custom-videos/${id}/offer`).set(creator.auth).send({ priceFcfa: 2000, deadlineDays: 7 })).status).toBe(200);
+    expect((await api().post(`/api/custom-videos/${id}/offer`).set(creator.auth).send({ price: 2000, deadlineDays: 7 })).status).toBe(200);
     const paid = await api().post(`/api/custom-videos/${id}/pay`).set(buyer.auth).send(PAY);
     expect(paid.status).toBe(202);
     const reference = paid.body.payment.reference as string;
@@ -60,7 +60,7 @@ describe('Étape 23 — créateurs et paiements', () => {
 
     const payment = await prisma.customVideoPayment.findUniqueOrThrow({ where: { reference } });
     const earning = await prisma.creatorEarning.findFirst({ where: { sourceId: payment.id } });
-    expect(payment).toMatchObject({ status: 'PAID', grossFcfa: 2000, commissionFcfa: 400, creatorFcfa: 1600 });
+    expect(payment).toMatchObject({ status: 'PAID', grossAmount: 2000, commissionAmount: 400, creatorAmount: 1600 });
     expect(earning).toMatchObject({ creatorAmount: 1600, platformFeeAmount: 400, status: 'AVAILABLE' });
   });
 
@@ -70,7 +70,7 @@ describe('Étape 23 — créateurs et paiements', () => {
     const created = await api().post(`/api/custom-videos/creators/${creator.user.id}/requests`)
       .set(buyer.auth).send({ requestText: 'Demande à rembourser' });
     const id = created.body.request.id as string;
-    await api().post(`/api/custom-videos/${id}/offer`).set(creator.auth).send({ priceFcfa: 2000, deadlineDays: 7 });
+    await api().post(`/api/custom-videos/${id}/offer`).set(creator.auth).send({ price: 2000, deadlineDays: 7 });
     const paid = await api().post(`/api/custom-videos/${id}/pay`).set(buyer.auth).send(PAY);
     expect((await settle(paid.body.payment.reference, 'SUCCESS', { amount: 2000 })).status).toBe(200);
 

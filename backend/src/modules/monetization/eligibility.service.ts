@@ -141,10 +141,17 @@ export async function evaluateCreatorEligibility(creatorId: string, now = new Da
     noActiveSanction: c.REQUIRE_NO_ACTIVE_SANCTION === 0 || !['SUSPENDED', 'BANNED'].includes(user.status),
     originalContent: c.REQUIRE_ORIGINAL_CONTENT === 0 || (videoPublications + shortPublications) > 0,
     manualValidation: c.REQUIRE_MANUAL_VALIDATION === 0 || approval?.status === 'APPROVED',
-    minimumAge: ageAt(user.birthDate, now) >= c.MIN_PAYOUT_AGE,
+    minimumAge: (user.birthDate ? ageAt(user.birthDate, now) : 0) >= c.MIN_PAYOUT_AGE,
   };
   const reasons = Object.entries(checks).filter(([, ok]) => !ok).map(([key]) => key);
-  return { eligible: reasons.length === 0, reasons, checks, metrics: { subscribers: followers, watchTimeSeconds: watchedSeconds, shortsViews: qualifiedShortViews, publications: videoPublications + shortPublications }, approval: approval?.status ?? 'PENDING' };
+  const details = buildEligibilityDetails(checks, {
+    subscribers: { required: c.MIN_SUBSCRIBERS, current: followers },
+    watchTime: { required: c.MIN_WATCH_TIME_SECONDS, current: watchedSeconds },
+    shortsViews: { required: c.MIN_SHORT_VIEWS, current: qualifiedShortViews },
+    publications: { required: c.MIN_PUBLICATIONS, current: videoPublications + shortPublications },
+    minimumAge: { required: c.MIN_PAYOUT_AGE, current: (user.birthDate ? ageAt(user.birthDate, now) : 0) },
+  });
+  return { eligible: reasons.length === 0, reasons, checks, details, metrics: { subscribers: followers, watchTimeSeconds: watchedSeconds, shortsViews: qualifiedShortViews, publications: videoPublications + shortPublications }, approval: approval?.status ?? 'PENDING' };
 }
 
 export async function reviewCreatorEligibility(creatorId: string, status: 'APPROVED' | 'REJECTED', reviewerId: string, rejectionReason?: string) {
@@ -152,5 +159,15 @@ export async function reviewCreatorEligibility(creatorId: string, status: 'APPRO
     where: { creatorId },
     create: { creatorId, status, reviewedAt: new Date(), reviewedByUserId: reviewerId, rejectionReason: status === 'REJECTED' ? rejectionReason ?? null : null },
     update: { status, reviewedAt: new Date(), reviewedByUserId: reviewerId, rejectionReason: status === 'REJECTED' ? rejectionReason ?? null : null },
+  });
+}
+
+export type EligibilityDetail = { key: string; met: boolean; required: number | null; current: number | null };
+
+/** Détail condition par condition : pour les critères chiffrés, le seuil exigé et la valeur actuelle ; pour les autres, seulement l'état. */
+export function buildEligibilityDetails(checks: Record<string, boolean>, numeric: Record<string, { required: number; current: number }>): EligibilityDetail[] {
+  return Object.entries(checks).map(([key, met]) => {
+    const n = numeric[key];
+    return { key, met, required: n ? n.required : null, current: n ? n.current : null };
   });
 }

@@ -1,3 +1,4 @@
+import { countrySchema } from '../../utils/schemas';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, authed } from '../../middleware/auth';
@@ -10,7 +11,7 @@ import * as svc from './auth.service';
 
 export const authRouter = Router();
 
-const registerSchema = z.object({ email: emailSchema, username: usernameSchema, password: passwordSchema, displayName: displayNameSchema, birthDate: birthDateSchema });
+const registerSchema = z.object({ email: emailSchema, username: usernameSchema, password: passwordSchema, displayName: displayNameSchema, birthDate: birthDateSchema, country: countrySchema.optional() });
 const loginSchema = z.object({ identifier: z.string().trim().min(3).max(254), password: z.string().min(1).max(200) });
 const tokenSchema = z.object({ refreshToken: z.string().min(10).max(500) });
 

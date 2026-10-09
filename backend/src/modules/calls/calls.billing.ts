@@ -1,11 +1,11 @@
-import { splitAmountFcfa } from '../../utils/money';
+import { splitAmount } from '../../utils/money';
 
 /** Ce qui a été figé à la demande d'appel (la règle appliquée ne change plus, même si les réglages du créateur ou la commission changent ensuite). */
-export type BillingInput = { pricingMode: 'PER_MINUTE' | 'PER_SESSION'; unitPriceFcfa: number; requestedMinutes: number; grossFcfa: number; commissionBps: number };
-export type Billing = { consumedFcfa: number; refundFcfa: number; commissionFcfa: number; creatorFcfa: number; billedMinutes: number };
+export type BillingInput = { pricingMode: 'PER_MINUTE' | 'PER_SESSION'; unitPrice: number; requestedMinutes: number; grossAmount: number; commissionBps: number };
+export type Billing = { consumedAmount: number; refundAmount: number; commissionAmount: number; creatorAmount: number; billedMinutes: number };
 
 /** Montant prépayé d'une demande : par minute = prix × minutes ; par session = prix de la session (la durée est alors un plafond). */
-export const prepaidAmount = (mode: BillingInput['pricingMode'], unitPriceFcfa: number, minutes: number) => (mode === 'PER_MINUTE' ? unitPriceFcfa * minutes : unitPriceFcfa);
+export const prepaidAmount = (mode: BillingInput['pricingMode'], unitPrice: number, minutes: number) => (mode === 'PER_MINUTE' ? unitPrice * minutes : unitPrice);
 
 /**
  * Décompte d'un appel terminé, en entiers FCFA (fonction pure, testée).
@@ -16,18 +16,18 @@ export const prepaidAmount = (mode: BillingInput['pricingMode'], unitPriceFcfa: 
  */
 export function billCall(b: BillingInput, actualSeconds: number, minBillableSeconds: number): Billing {
   const seconds = Math.max(0, Math.floor(actualSeconds));
-  let consumedFcfa = 0;
+  let consumedAmount = 0;
   let billedMinutes = 0;
   if (seconds >= minBillableSeconds && seconds > 0) {
     if (b.pricingMode === 'PER_MINUTE') {
       billedMinutes = Math.min(b.requestedMinutes, Math.max(1, Math.ceil(seconds / 60)));
-      consumedFcfa = Math.min(b.grossFcfa, b.unitPriceFcfa * billedMinutes);
+      consumedAmount = Math.min(b.grossAmount, b.unitPrice * billedMinutes);
     } else {
       billedMinutes = b.requestedMinutes;
-      consumedFcfa = b.grossFcfa;
+      consumedAmount = b.grossAmount;
     }
   }
-  if (consumedFcfa === 0) return { consumedFcfa: 0, refundFcfa: b.grossFcfa, commissionFcfa: 0, creatorFcfa: 0, billedMinutes: 0 };
-  const split = splitAmountFcfa(consumedFcfa, b.commissionBps);
-  return { consumedFcfa, refundFcfa: b.grossFcfa - consumedFcfa, commissionFcfa: split.commissionFcfa, creatorFcfa: split.creatorFcfa, billedMinutes };
+  if (consumedAmount === 0) return { consumedAmount: 0, refundAmount: b.grossAmount, commissionAmount: 0, creatorAmount: 0, billedMinutes: 0 };
+  const split = splitAmount(consumedAmount, b.commissionBps);
+  return { consumedAmount, refundAmount: b.grossAmount - consumedAmount, commissionAmount: split.platformFeeAmount, creatorAmount: split.creatorAmount, billedMinutes };
 }

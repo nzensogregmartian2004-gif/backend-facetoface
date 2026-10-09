@@ -1,14 +1,16 @@
 import { prisma } from '../../config/db';
 import { settleCallPayment } from '../calls/calls.settlement';
+import { settleGroupAccess } from '../messages/groupAccess.service';
 import { notify } from '../notifications/notifications.service';
 import { recordPaidMessageEarning } from '../monetization/monetization.service';
 import { settleSubscriptionPayment } from '../subscriptions/subscriptions.service';
 import { settleCustomVideoPayment } from '../customVideos/customVideos.service';
 import { settlePremiumPayment } from '../premium/premium.service';
 import { syncPaymentTransaction } from '../wallet/wallet.service';
+import { settleCoinPurchase } from '../coins/coins.service';
 import { assessActivity, holdPaymentReference } from '../fraud/fraud.service';
 
-export type SettleOutcome = { status: 'SUCCESS' | 'FAILED'; /** Montant confirmé par le prestataire, s'il l'indique. */ amountFcfa?: number; providerRef?: string; payload?: unknown };
+export type SettleOutcome = { status: 'SUCCESS' | 'FAILED'; /** Montant confirmé par le prestataire, s'il l'indique. */ amount?: number; providerRef?: string; payload?: unknown };
 export type SettleResult = 'paid' | 'failed' | 'review' | 'already' | 'unknown';
 
 const json = (v: unknown) => (v === undefined ? undefined : (JSON.parse(JSON.stringify(v)) as object));
@@ -33,9 +35,9 @@ export async function settlePurchase(reference: string, o: SettleOutcome): Promi
         console.error(`[paiement] succès tardif sur un achat échoué (réf ${reference}) : vérification manuelle / remboursement requis`);
         return 'review';
       }
-      if (o.amountFcfa !== undefined && o.amountFcfa < p.grossFcfa) {
+      if (o.amount !== undefined && o.amount < p.grossAmount) {
         await tx.messagePurchase.updateMany({ where: { id: p.id, status: { in: ['PENDING', 'REVIEW'] } }, data: { status: 'REVIEW', reviewReason: 'AMOUNT_MISMATCH', providerPayload: payload } });
-        console.error(`[paiement] montant confirmé (${o.amountFcfa}) inférieur au prix (${p.grossFcfa}) pour la réf ${reference} : vérification manuelle`);
+        console.error(`[paiement] montant confirmé (${o.amount}) inférieur au prix (${p.grossAmount}) pour la réf ${reference} : vérification manuelle`);
         return 'review';
       }
       const r = await tx.messagePurchase.updateMany({
@@ -45,7 +47,7 @@ export async function settlePurchase(reference: string, o: SettleOutcome): Promi
       if (r.count !== 1) return 'already';
       const m = await tx.message.findUnique({ where: { id: p.messageId }, select: { conversationId: true } });
       await recordPaidMessageEarning(tx, p);
-      await notify(tx, { userId: p.sellerId, type: 'MESSAGE_PURCHASED', actorId: p.buyerId, targetType: 'CONVERSATION', targetId: m?.conversationId, amountFcfa: p.creatorFcfa });
+      await notify(tx, { userId: p.sellerId, type: 'MESSAGE_PURCHASED', actorId: p.buyerId, targetType: 'CONVERSATION', targetId: m?.conversationId, amount: p.creatorAmount, currency: p.currency });
       return 'paid';
     }
 
@@ -69,7 +71,11 @@ export async function settleReference(reference: string, o: SettleOutcome): Prom
           ? await prisma.customVideoPayment.findUnique({ where: { reference }, select: { buyerId: true } })
           : reference.startsWith('P')
             ? await prisma.premiumPayment.findUnique({ where: { reference }, select: { userId: true } })
-            : await prisma.messagePurchase.findUnique({ where: { reference }, select: { buyerId: true } });
+            : reference.startsWith('K')
+              ? await prisma.coinPurchase.findUnique({ where: { reference }, select: { userId: true } })
+              : reference.startsWith('G')
+                ? await prisma.groupAccessPurchase.findUnique({ where: { reference }, select: { buyerId: true } })
+                : await prisma.messagePurchase.findUnique({ where: { reference }, select: { buyerId: true } });
     const userId = actor && ('callerId' in actor ? actor.callerId : 'buyerId' in actor ? actor.buyerId : actor.userId);
     if (userId) {
       const risk = await assessActivity(userId, 'PAYMENT', {});
@@ -81,6 +87,8 @@ export async function settleReference(reference: string, o: SettleOutcome): Prom
   else if (reference.startsWith('S')) result = await settleSubscriptionPayment(reference, o);
   else if (reference.startsWith('V')) result = await settleCustomVideoPayment(reference, o);
   else if (reference.startsWith('P')) result = await settlePremiumPayment(reference, o);
+  else if (reference.startsWith('K')) result = await settleCoinPurchase(reference, o);
+  else if (reference.startsWith('G')) result = await settleGroupAccess(reference, o);
   else result = await settlePurchase(reference, o);
   if (result !== 'unknown') {
     const status = result === 'paid' || result === 'already' ? 'PAID' : result === 'failed' ? 'FAILED' : 'REVIEW';

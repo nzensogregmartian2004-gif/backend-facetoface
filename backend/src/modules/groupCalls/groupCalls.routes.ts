@@ -1,0 +1,14 @@
+import { Router } from 'express';
+import { authed, requireAuth } from '../../middleware/auth';
+import { wrap } from '../../utils/async';
+import { body } from '../../utils/validate';
+import { createGroupCallSchema, joinGroupCallSchema } from './groupCalls.schemas';
+import * as svc from './groupCalls.service';
+export const groupCallsRouter = Router(); groupCallsRouter.use(requireAuth);
+const me = (req: Parameters<typeof authed>[0]) => authed(req).user;
+const id = (req: { params: Record<string, unknown> }) => String(req.params.id);
+groupCallsRouter.post('/', wrap(async (req,res)=>res.status(201).json(await svc.create(me(req), body(createGroupCallSchema, req)))));
+groupCallsRouter.get('/:id', wrap(async (req,res)=>res.json(await svc.get(me(req), id(req)))));
+groupCallsRouter.post('/:id/join', wrap(async (req,res)=>{ body(joinGroupCallSchema, req); res.json(await svc.join(me(req), id(req))); }));
+groupCallsRouter.post('/:id/leave', wrap(async (req,res)=>res.json(await svc.leave(me(req), id(req)))));
+groupCallsRouter.post('/:id/end', wrap(async (req,res)=>res.json(await svc.end(me(req), id(req)))));

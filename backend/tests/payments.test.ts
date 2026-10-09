@@ -15,7 +15,7 @@ const PAY = { operator: 'AIRTEL_MONEY', phone: '060123456' };
 async function pending(price = 1000) {
   const creator = await creatorSignedIn(1); const fan = await signedIn(2);
   const cid = (await api().post(`${M}/conversations`).set(fan.auth).send({ userId: creator.user.id })).body.conversation.id as string;
-  const m = (await api().post(`${M}/conversations/${cid}/messages`).set(creator.auth).send({ text: 'secret', priceFcfa: price })).body.message;
+  const m = (await api().post(`${M}/conversations/${cid}/messages`).set(creator.auth).send({ text: 'secret', price: price })).body.message;
   const r = await api().post(`${M}/${m.id}/unlock`).set(fan.auth).send(PAY);
   const row = await prisma.messagePurchase.findFirstOrThrow();
   return { creator: creator as S, fan: fan as S, cid, messageId: m.id as string, status: r.status, row };

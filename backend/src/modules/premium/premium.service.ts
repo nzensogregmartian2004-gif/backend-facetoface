@@ -10,8 +10,7 @@ import { syncPaymentTransaction } from '../wallet/wallet.service';
 type DB = Prisma.TransactionClient | typeof prisma;
 const reference = () => `P${Date.now().toString(36).slice(-7)}${randomBytes(3).toString('hex')}`.toUpperCase();
 const DEFAULT_BENEFITS = { adFree: true, premiumBadge: true };
-const adminIds = () => env.PREMIUM_ADMIN_USER_IDS.split(',').map(v => v.trim()).filter(Boolean);
-const isAdmin = (id: string) => adminIds().includes(id);
+import { actorById, requirePermission } from '../admin/roles';
 
 async function setting(db: DB) {
   return db.premiumSetting.upsert({ where: { id: 'default' }, create: { id: 'default', monthlyPriceMinor: env.PREMIUM_DEFAULT_MONTHLY_PRICE, annualPriceMinor: env.PREMIUM_DEFAULT_ANNUAL_PRICE, currency: 'XAF', trialDays: env.PREMIUM_DEFAULT_TRIAL_DAYS, benefits: DEFAULT_BENEFITS }, update: {} });
@@ -20,7 +19,7 @@ const dto = (s: any) => ({ id: s.id, status: s.status, billingPeriod: s.billingP
 
 export async function getSettings() { const s = await setting(prisma); return { ...s, benefits: { ...DEFAULT_BENEFITS, ...(s.benefits as any ?? {}) } }; }
 export async function updateSettings(userId: string, input: any) {
-  if (!isAdmin(userId)) throw forbidden('ADMIN_REQUIRED', 'Droits administrateur requis');
+  requirePermission(await actorById(userId), input.monthlyPriceMinor !== undefined || input.annualPriceMinor !== undefined ? 'finance.premium.prices.update' : 'premium.subscriptions.manage');
   return prisma.premiumSetting.upsert({ where: { id: 'default' }, create: { id: 'default', monthlyPriceMinor: input.monthlyPriceMinor ?? env.PREMIUM_DEFAULT_MONTHLY_PRICE, annualPriceMinor: input.annualPriceMinor ?? env.PREMIUM_DEFAULT_ANNUAL_PRICE, currency: input.currency ?? 'XAF', trialDays: input.trialDays ?? env.PREMIUM_DEFAULT_TRIAL_DAYS, benefits: { ...DEFAULT_BENEFITS, ...(input.benefits ?? {}) }, ...input, updatedByUserId: userId }, update: { ...input, benefits: input.benefits ? { ...DEFAULT_BENEFITS, ...input.benefits } : undefined, updatedByUserId: userId } });
 }
 
@@ -75,7 +74,7 @@ export async function subscribe(user: User, input: { billingPeriod:'MONTHLY'|'AN
   const ref = reference();
   const payment = await prisma.premiumPayment.create({ data: { subscriptionId:sub.id, userId:user.id, billingPeriod:input.billingPeriod, grossAmount:price.base, discountAmount:price.discount, netAmount:price.net, currency:price.currency, reference:ref, operator:input.operator, payerPhoneHint:input.phone.slice(-4), promotionCode:price.promotionCode } });
   try {
-    const result = await payments.initiate({ reference:ref, amountFcfa:price.net, operator:input.operator, phone:input.phone, description:`Face to Face Premium ${input.billingPeriod === 'ANNUAL' ? 'annuel' : 'mensuel'}` });
+    const result = await payments.initiate({ reference:ref, amount:price.net, currency:'XAF', operator:input.operator, phone:input.phone, description:`Face to Face Premium ${input.billingPeriod === 'ANNUAL' ? 'annuel' : 'mensuel'}` });
     if (result.status === 'REJECTED') { await prisma.premiumPayment.update({ where:{id:payment.id}, data:{status:'FAILED',reviewReason:result.code} }); throw new AppError(402,'PAYMENT_FAILED',result.message || 'Le paiement a été refusé',{code:result.code}); }
     if (result.status === 'ACCEPTED' && result.providerRef) await prisma.premiumPayment.update({ where:{id:payment.id}, data:{externalRef:result.providerRef} });
   } catch (err) { if (err instanceof AppError && err.code === 'PAYMENT_FAILED') throw err; if (err instanceof AppError) { await prisma.premiumPayment.update({where:{id:payment.id},data:{status:'FAILED',reviewReason:err.code}}); } throw err; }
@@ -94,14 +93,14 @@ export async function renew(user: User, input: { operator:MobileOperator; phone:
   return subscribe(user,{billingPeriod:current.billingPeriod as any,operator:input.operator,phone:input.phone,promotionCode:input.promotionCode});
 }
 
-export async function settlePremiumPayment(ref:string,outcome:{status:'SUCCESS'|'FAILED';amountFcfa?:number;providerRef?:string;payload?:unknown}) {
+export async function settlePremiumPayment(ref:string,outcome:{status:'SUCCESS'|'FAILED';amount?:number;providerRef?:string;payload?:unknown}) {
   return prisma.$transaction(async tx=>{
     const p=await tx.premiumPayment.findUnique({where:{reference:ref},include:{subscription:true}});
     if(!p) return 'unknown' as const; if(p.status==='PAID') return 'already' as const;
     const payload=outcome.payload===undefined?undefined:JSON.parse(JSON.stringify(outcome.payload));
     if(outcome.status==='SUCCESS'){
       if(p.status==='FAILED'){await tx.premiumPayment.update({where:{id:p.id},data:{status:'REVIEW',reviewReason:'LATE_SUCCESS',providerPayload:payload}}); return 'review' as const;}
-      if(outcome.amountFcfa!==undefined && outcome.amountFcfa<p.netAmount){await tx.premiumPayment.update({where:{id:p.id},data:{status:'REVIEW',reviewReason:'AMOUNT_MISMATCH',providerPayload:payload}}); return 'review' as const;}
+      if(outcome.amount!==undefined && outcome.amount<p.netAmount){await tx.premiumPayment.update({where:{id:p.id},data:{status:'REVIEW',reviewReason:'AMOUNT_MISMATCH',providerPayload:payload}}); return 'review' as const;}
       const now=new Date(); const r=await tx.premiumPayment.updateMany({where:{id:p.id,status:{in:['PENDING','REVIEW']}},data:{status:'PAID',paidAt:now,providerPayload:payload,reviewReason:null,...(outcome.providerRef?{externalRef:outcome.providerRef}:{})}});
       if(r.count!==1) return 'already' as const;
       const start=now; const days=p.billingPeriod==='ANNUAL'?365:30; const expires=new Date(start.getTime()+days*86400000);
@@ -114,6 +113,6 @@ export async function settlePremiumPayment(ref:string,outcome:{status:'SUCCESS'|
   });
 }
 
-export async function createPromotion(user:User,input:any){ if(!isAdmin(user.id)) throw forbidden('ADMIN_REQUIRED','Droits administrateur requis'); if(input.endsAt<=input.startsAt) throw badRequest('INVALID_PROMOTION_DATES','La fin doit être après le début'); if(input.type==='PERCENT' && input.value>10000) throw badRequest('INVALID_PROMOTION_VALUE','Pourcentage maximal : 100 %'); return prisma.premiumPromotion.create({data:{...input,createdById:user.id}}); }
-export async function listPromotions(user:User){ if(!isAdmin(user.id)) throw forbidden('ADMIN_REQUIRED','Droits administrateur requis'); return prisma.premiumPromotion.findMany({orderBy:{createdAt:'desc'},take:200}); }
-export async function setPromotionStatus(user:User,id:string,isActive:boolean){ if(!isAdmin(user.id)) throw forbidden('ADMIN_REQUIRED','Droits administrateur requis'); return prisma.premiumPromotion.update({where:{id},data:{isActive}}); }
+export async function createPromotion(user:User,input:any){ requirePermission(user, 'finance.premium.prices.update'); if(input.endsAt<=input.startsAt) throw badRequest('INVALID_PROMOTION_DATES','La fin doit être après le début'); if(input.type==='PERCENT' && input.value>10000) throw badRequest('INVALID_PROMOTION_VALUE','Pourcentage maximal : 100 %'); return prisma.premiumPromotion.create({data:{...input,createdById:user.id}}); }
+export async function listPromotions(user:User){ requirePermission(user, 'premium.subscriptions.manage'); return prisma.premiumPromotion.findMany({orderBy:{createdAt:'desc'},take:200}); }
+export async function setPromotionStatus(user:User,id:string,isActive:boolean){ requirePermission(user, 'finance.premium.prices.update'); return prisma.premiumPromotion.update({where:{id},data:{isActive}}); }
