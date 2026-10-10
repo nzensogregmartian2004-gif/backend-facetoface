@@ -2,6 +2,7 @@ import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { badRequest, conflict, forbidden, notFound } from '../../utils/errors';
 import { callProvider } from '../../utils/callProvider';
+import { assertCallsConfigured } from '../../utils/callsGuard';
 
 const MAX = 4;
 const participant = (r: any) => ({ id: r.user.id, username: r.user.username, displayName: r.user.displayName, avatarUrl: r.user.avatarUrl });
@@ -13,6 +14,7 @@ async function member(userId: string, conversationId: string) {
 }
 
 export async function create(user: User, input: { conversationId: string; type: 'AUDIO'|'VIDEO' }) {
+  assertCallsConfigured(callProvider.configured());
   const m = await member(user.id, input.conversationId);
   const conversation = await prisma.conversation.findUnique({ where: { id: input.conversationId }, select: { id: true, isGroup: true } });
   if (!conversation?.isGroup) throw badRequest('GROUP_REQUIRED', 'Un appel de groupe nécessite une conversation de groupe');
@@ -24,6 +26,7 @@ export async function create(user: User, input: { conversationId: string; type: 
 }
 
 export async function join(user: User, id: string) {
+  assertCallsConfigured(callProvider.configured());
   const call = await prisma.groupCall.findUnique({ where: { id }, include: { conversation: true, participants: { include: { user: true }, orderBy: { joinedAt: 'asc' } } } });
   if (!call || call.status !== 'ACTIVE') throw notFound('Appel de groupe introuvable');
   await member(user.id, call.conversationId);

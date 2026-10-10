@@ -5,6 +5,8 @@ import { prisma } from '../../config/db';
 import { authed, requireAuth } from '../../middleware/auth';
 import { reportLimiter } from '../../middleware/rateLimit';
 import { wrap } from '../../utils/async';
+import { moderate } from './moderation.service';
+import { requirePermission, requireSuperAdmin } from '../admin/roles';
 import { badRequest, forbidden, notFound } from '../../utils/errors';
 import { body } from '../../utils/validate';
 import { loadVisible } from '../content/access';
@@ -87,4 +89,20 @@ moderationRouter.post('/reports', reportLimiter, wrap(async (req, res) => {
   if (existing) return res.json({ report: { id: existing.id, status: existing.status } });
   const r = await prisma.report.create({ data: { reporterId: me.id, targetType: b.targetType, targetId: b.targetId, reason: b.reason, details: b.details || null } });
   res.status(201).json({ report: { id: r.id, status: r.status } });
+}));
+
+/** Dossier d'enquête : action de modération prise par un administrateur, motif obligatoire. Aucun remboursement. */
+const adminActionSchema = z.object({
+  targetType: z.enum(['USER', 'GROUP', 'VIDEO', 'SHORT', 'LIVE', 'COMMENT', 'MESSAGE', 'PAID_CONTENT']),
+  targetId: z.string().trim().min(1).max(64),
+  action: z.enum(['WARNING', 'HIDE', 'UNHIDE', 'REMOVE', 'RESTORE', 'SUSPEND', 'BAN', 'UNSUSPEND', 'UNBAN', 'DISABLE_MONETIZATION', 'ENABLE_MONETIZATION']),
+  reason: z.string().trim().min(5, 'Motif obligatoire (5 caractères minimum)').max(300),
+  reportId: z.string().trim().min(1).max(64).optional(),
+}).strict();
+moderationRouter.post('/admin/actions', wrap(async (req, res) => {
+  const admin = authed(req).user;
+  const b = body(adminActionSchema, req);
+  if (b.action === 'BAN' || b.action === 'UNBAN') requireSuperAdmin(admin);
+  if (b.action === 'SUSPEND' || b.action === 'UNSUSPEND') requirePermission(admin, 'users.suspend');
+  res.status(201).json({ action: await moderate(admin, b.targetType, b.targetId, b.action, b.reason, b.reportId) });
 }));

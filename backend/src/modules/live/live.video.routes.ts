@@ -27,3 +27,4 @@ liveVideoRouter.get('/:id/report', wrap(async (req, res) => { res.json(await svc
 liveVideoRouter.get('/:id/cohosts', wrap(async (req, res) => { res.json(await svc.listCoHosts(me(req), id(req))); }));
 liveVideoRouter.get('/:id/participation', wrap(async (req, res) => { res.json(await svc.myParticipation(me(req), id(req))); }));
 liveVideoRouter.get('/:id/viewers', wrap(async (req, res) => { res.json(await svc.listViewers(me(req), id(req))); }));
+liveVideoRouter.get('/:id/revenue', wrap(async (req, res) => { res.json(await svc.liveRevenue(me(req), id(req))); }));

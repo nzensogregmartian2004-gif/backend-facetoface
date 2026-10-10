@@ -1,5 +1,6 @@
 import type { Prisma, User } from '@prisma/client';
 import { prisma } from '../../config/db';
+import { notFound } from '../../utils/errors';
 
 export const DEFAULT_MONETIZATION_CONDITIONS: Record<string, number> = {
   MIN_SUBSCRIBERS: 500,
@@ -170,4 +171,15 @@ export function buildEligibilityDetails(checks: Record<string, boolean>, numeric
     const n = numeric[key];
     return { key, met, required: n ? n.required : null, current: n ? n.current : null };
   });
+}
+
+/** Lecture admin de l'éligibilité : calcul actuel et dernière décision enregistrée. Ne modifie rien. */
+export async function getCreatorEligibilityReview(creatorId: string) {
+  const creator = await prisma.user.findUnique({ where: { id: creatorId }, select: { id: true, username: true, displayName: true, isCreator: true } });
+  if (!creator) throw notFound('Créateur introuvable');
+  const [evaluation, decision] = await Promise.all([
+    evaluateCreatorEligibility(creatorId),
+    prisma.creatorMonetizationEligibility.findUnique({ where: { creatorId } }),
+  ]);
+  return { creator, evaluation, decision };
 }

@@ -68,4 +68,6 @@ export const CONFIG_DEFAULTS: ConfigDefault[] = [
   { key: 'STORIES.DEFAULT_HOURS', value: 24, type: 'INTEGER', category: 'GENERAL', description: 'Durée de vie par défaut d’une story, en heures.' },
   { key: 'STORIES.MAX_HOURS', value: 72, type: 'INTEGER', category: 'GENERAL', description: 'Durée de vie maximale qu’un auteur peut choisir pour une story, en heures.' },
   { key: 'AUDIENCE.MIN_GROUP_SIZE', value: 5, type: 'INTEGER', category: 'GENERAL', description: 'Nombre minimum d’abonnés d’un pays pour qu’il apparaisse séparément dans l’audience du créateur ; en dessous, il est regroupé dans « Autres ».' },
+  { key: 'DISPUTES.RESPONSE_DAYS', value: 3, type: 'INTEGER', category: 'GENERAL', description: 'Délai, en jours, pour répondre à un litige (appel ou vidéo personnalisée). Sans réponse à l’échéance, le litige se clôt sans montant.' },
+  { key: 'CONTENT.PURGE_AFTER_DAYS', value: 30, type: 'INTEGER', category: 'GENERAL', description: 'Délai, en jours, entre le retrait d’un contenu et la purge définitive possible par le super administrateur.' },
 ];

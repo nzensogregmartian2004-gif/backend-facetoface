@@ -2,6 +2,7 @@ import { prisma } from '../../config/db';
 import { env } from '../../config/env';
 import { PAYMENT_OPERATORS, payments, type MobileOperator } from '../../utils/payments';
 import { reconcileCallPayments } from '../calls/calls.settlement';
+import { closeExpiredDisputes } from '../disputes/disputeResponse.service';
 import { settlePurchase } from './settlement';
 import { settleGroupAccess } from '../messages/groupAccess.service';
 
@@ -75,7 +76,7 @@ export function startReconciler(): NodeJS.Timeout | null {
   const t = setInterval(async () => {
     if (running) return;
     running = true;
-    try { await reconcilePurchases(); await reconcileGroupAccess(); await reconcileCallPayments(); } catch (e) { console.error('[paiement] rapprochement en erreur', e); } finally { running = false; }
+    try { await reconcilePurchases(); await reconcileGroupAccess(); await reconcileCallPayments(); await closeExpiredDisputes(); } catch (e) { console.error('[paiement] rapprochement en erreur', e); } finally { running = false; }
   }, env.PAYMENT_RECONCILE_INTERVAL_SECONDS * 1000);
   t.unref();
   return t;

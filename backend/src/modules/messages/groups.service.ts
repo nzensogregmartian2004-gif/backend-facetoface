@@ -51,7 +51,7 @@ export async function groupDto(viewer: User, conv: any) {
   return {
     id: conv.id, isGroup: true, name: conv.name, photoKey: conv.photoKey, description: conv.description,
     allowPaidContent: conv.allowPaidContent, unreadCount: me.unreadCount, lastMessageAt: conv.lastMessageAt,
-    entry: conv.entryPrice != null ? { price: conv.entryPrice, currency: conv.entryCurrency ?? DEFAULT_CURRENCY } : null, isOwner: conv.ownerId === viewer.id,
+    entry: conv.entryPrice != null ? { price: conv.entryPrice, currency: conv.entryCurrency ?? DEFAULT_CURRENCY } : null, isOwner: conv.ownerId === viewer.id, owner: conv.ownerId ? (cardById.get(conv.ownerId) ?? null) : null,
     members: conv.members.map((m: any) => ({ id: m.userId, role: m.role, user: cardById.get(m.userId) ?? null })),
     memberCount: conv.members.length, myRole: me.role,
   };
@@ -172,4 +172,21 @@ export async function previewInvite(token: string) {
   if (!invite || invite.revokedAt || (invite.expiresAt && invite.expiresAt <= new Date()) || (invite.maxUses != null && invite.uses >= invite.maxUses) || !invite.conversation.isGroup) throw notFound('Invitation invalide ou expirée');
   const memberCount = await prisma.conversationMember.count({ where: { conversationId: invite.conversationId } });
   return { group: { id: invite.conversationId, name: invite.conversation.name, description: invite.conversation.description, memberCount, entry: invite.conversation.entryPrice != null ? { price: invite.conversation.entryPrice, currency: invite.conversation.entryCurrency ?? DEFAULT_CURRENCY } : null } };
+}
+
+/**
+ * Passation de la propriété. Seul le propriétaire actuel peut transférer. Le destinataire, membre du groupe,
+ * devient administrateur dans la même opération : le groupe garde toujours un administrateur habilité.
+ * Les paiements d'entrée futurs vont au nouveau propriétaire.
+ */
+export async function transferOwnership(viewer: User, conversationId: string, userId: string) {
+  const row = await member(viewer, conversationId);
+  if (row.conversation.ownerId !== viewer.id) throw forbidden('NOT_OWNER', 'Seul le propriétaire peut transférer la propriété du groupe');
+  if (userId === viewer.id) throw badRequest('ALREADY_OWNER', 'Vous êtes déjà propriétaire du groupe');
+  const target = await prisma.conversationMember.findUnique({ where: { conversationId_userId: { conversationId, userId } } });
+  if (!target) throw notFound('Ce membre ne fait pas partie du groupe');
+  await prisma.$transaction([
+    prisma.conversationMember.update({ where: { id: target.id }, data: { role: 'ADMIN' } }),
+    prisma.conversation.update({ where: { id: conversationId }, data: { ownerId: userId } }),
+  ]);
 }

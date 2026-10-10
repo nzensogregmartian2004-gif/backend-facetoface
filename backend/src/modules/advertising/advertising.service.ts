@@ -6,6 +6,7 @@ import { normalizeCurrency } from '../monetization/currency';
 import { getViewMonetizationSettings, splitAdvertisingRevenue } from '../monetization/views.service';
 import { hasActivePremium } from '../premium/premium.service';
 import { assessActivity } from '../fraud/fraud.service';
+import { pickFields, recordAdminChange } from '../admin/adminAudit';
 
 type DB = Prisma.TransactionClient | typeof prisma;
 
@@ -29,28 +30,33 @@ export async function getSettings() {
   return settings(prisma);
 }
 
-export async function updateSettings(input: { enabled?: boolean; defaultFrequencyCap?: number; defaultFrequencyWindowHours?: number; creatorShareBps?: number }, userId: string) {
-  return prisma.advertisingSetting.upsert({
-    where: { id: 'default' },
-    create: { id: 'default', ...input, updatedByUserId: userId },
-    update: { ...input, updatedByUserId: userId },
-  });
+export async function updateSettings(input: { reason: string; enabled?: boolean; defaultFrequencyCap?: number; defaultFrequencyWindowHours?: number; creatorShareBps?: number }, userId: string) {
+  const { reason, ...changes } = input;
+  const before = await settings(prisma);
+  const after = await prisma.advertisingSetting.update({ where: { id: before.id }, data: { ...changes, updatedByUserId: userId } });
+  await recordAdminChange({ adminId: userId, action: 'PATCH settings', targetType: 'ADVERTISING_SETTING', targetId: before.id, reason, module: 'advertising', oldValue: pickFields(before, Object.keys(changes)), newValue: changes });
+  return after;
 }
 
 export async function createCampaign(userId: string, input: any) {
-  const currency = normalizeCurrency(input.currency);
-  return prisma.advertisingCampaign.create({ data: { ...input, currency, createdById: userId } });
+  const { reason, ...data } = input;
+  const currency = normalizeCurrency(data.currency);
+  const campaign = await prisma.advertisingCampaign.create({ data: { ...data, currency, createdById: userId } });
+  await recordAdminChange({ adminId: userId, action: 'CREATE campaign', targetType: 'ADVERTISING_CAMPAIGN', targetId: campaign.id, reason, module: 'advertising', newValue: { name: data.name, currency, budgetAmount: data.budgetAmount, pricePerImpression: data.pricePerImpression, startsAt: data.startsAt, endsAt: data.endsAt, formats: data.formats, placements: data.placements } });
+  return campaign;
 }
 
 export async function listCampaigns(status?: string) {
   return prisma.advertisingCampaign.findMany({ where: status ? { status: status as any } : undefined, orderBy: { createdAt: 'desc' }, take: 200 });
 }
 
-export async function setCampaignStatus(id: string, status: 'DRAFT'|'ACTIVE'|'PAUSED'|'COMPLETED'|'ARCHIVED') {
+export async function setCampaignStatus(id: string, status: 'DRAFT'|'ACTIVE'|'PAUSED'|'COMPLETED'|'ARCHIVED', reason: string, userId: string) {
   const row = await prisma.advertisingCampaign.findUnique({ where: { id } });
   if (!row) throw notFound('Campagne publicitaire introuvable');
   if (status === 'ACTIVE' && row.budgetAmount <= row.spentAmount) throw conflict('CAMPAIGN_BUDGET_EXHAUSTED', 'Le budget de cette campagne est épuisé');
-  return prisma.advertisingCampaign.update({ where: { id }, data: { status, activatedAt: status === 'ACTIVE' ? (row.activatedAt ?? new Date()) : row.activatedAt } });
+  const updated = await prisma.advertisingCampaign.update({ where: { id }, data: { status, activatedAt: status === 'ACTIVE' ? (row.activatedAt ?? new Date()) : row.activatedAt } });
+  await recordAdminChange({ adminId: userId, action: 'PATCH campaign status', targetType: 'ADVERTISING_CAMPAIGN', targetId: id, reason, module: 'advertising', oldValue: { status: row.status }, newValue: { status } });
+  return updated;
 }
 
 export async function selectAd(user: User, input: { format: string; placement: string; category?: string; contentType?: string; contentId?: string; creatorId?: string }) {

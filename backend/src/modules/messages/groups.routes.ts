@@ -6,7 +6,7 @@ import { body } from '../../utils/validate';
 import { z } from 'zod';
 import * as svc from './groups.service';
 import * as access from './groupAccess.service';
-import { groupUpdateSchema } from './groups.schemas';
+import { groupUpdateSchema, transferOwnershipSchema } from './groups.schemas';
 
 const createSchema = z.object({ name: z.string().trim().min(1).max(120), description: z.string().trim().max(500).optional(), allowPaidContent: z.boolean().optional(), memberIds: z.array(z.string().min(1).max(64)).max(99).optional() }).strict();
 const membersSchema = z.object({ userIds: z.array(z.string().min(1).max(64)).min(1).max(99) }).strict();
@@ -35,6 +35,8 @@ groupsRouter.patch('/:id', messageLimiter, wrap(async (req,res) => res.json(awai
 groupsRouter.post('/:id/members', messageLimiter, wrap(async (req,res) => res.json(await svc.addMembers(me(req), id(req), body(membersSchema, req).userIds))));
 groupsRouter.delete('/:id/members/:userId', wrap(async (req,res) => { await svc.removeMember(me(req), id(req), String(req.params.userId)); res.status(204).end(); }));
 groupsRouter.patch('/:id/members/:userId/role', wrap(async (req,res) => { await svc.setRole(me(req), id(req), String(req.params.userId), body(roleSchema, req).role); res.status(204).end(); }));
+/** Passation de la propriété : réservée au propriétaire actuel ; le destinataire devient administrateur. */
+groupsRouter.post('/:id/transfer-ownership', messageLimiter, wrap(async (req,res) => { await svc.transferOwnership(me(req), id(req), body(transferOwnershipSchema, req).userId); res.status(204).end(); }));
 groupsRouter.post('/:id/leave', wrap(async (req,res) => { await svc.leaveGroup(me(req), id(req)); res.status(204).end(); }));
 groupsRouter.post('/:id/invites', wrap(async (req,res) => { body(inviteSchema, req); res.status(201).json(await svc.createInvite(me(req), id(req))); }));
 groupsRouter.delete('/:id/invites', wrap(async (req,res) => { const b=body(revokeSchema, req); await svc.revokeInvite(me(req), id(req), b.token); res.status(204).end(); }));

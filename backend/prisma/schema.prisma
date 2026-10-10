@@ -425,6 +425,9 @@ model User {
   appConfigsUpdated     AppConfig[]        @relation("AppConfigUpdatedBy")
   fraudEvents            FraudEvent[]
   moderationActionsAdmin ModerationAction[] @relation("ModerationAdmin")
+  supportTickets         SupportTicket[]      @relation("SupportTicketOwner")
+  supportAssignedTickets SupportTicket[]      @relation("SupportTicketAssignee")
+  supportMessages        SupportMessage[]     @relation("SupportMessageAuthor")
   moderationActionsTargetUser ModerationAction[] @relation("ModerationTargetUser")
   monetizationSettingVersions MonetizationSettingVersion[] @relation("MonetizationVersionAdmin")
 
@@ -1028,6 +1031,7 @@ model Video {
   processingError String?
   processedAt     DateTime?
   manifestKey     String?
+  removedAt DateTime?
   variants        VideoVariant[] @relation("VideoVariants")
 
   author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
@@ -1075,6 +1079,7 @@ model Short {
   processingError String?
   processedAt     DateTime?
   manifestKey     String?
+  removedAt DateTime?
   variants        VideoVariant[] @relation("ShortVariants")
   watchEvents     ShortWatchEvent[]
 
@@ -1385,6 +1390,9 @@ model CustomVideoRequest {
   completedAt    DateTime?
   disputedAt    DateTime?
   disputeReason String?
+  disputeResponse String?
+  disputeRespondedAt DateTime?
+  disputeClosedAt DateTime?
   refundDueAt   DateTime?
   videoKey      String?
   mimeType      String?
@@ -1871,6 +1879,9 @@ model Call {
   // Litige (traité par l'administration à l'étape 16)
   disputedAt    DateTime?
   disputeReason String?
+  disputeResponse String?
+  disputeRespondedAt DateTime?
+  disputeClosedAt DateTime?
 
   createdAt DateTime @default(now())
 
@@ -2546,4 +2557,62 @@ model StoryView {
 
   @@id([storyId, viewerId])
   @@index([viewerId])
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_USER
+  RESOLVED
+  CLOSED
+}
+
+enum SupportTicketCategory {
+  ACCOUNT
+  PAYMENT
+  CONTENT
+  CREATOR
+  MONETIZATION
+  TECHNICAL
+  OTHER
+}
+
+enum SupportAuthorRole {
+  USER
+  ADMIN
+}
+
+/// Demande d'assistance ouverte par un utilisateur, traitée par l'équipe depuis le dashboard admin.
+model SupportTicket {
+  id              String                @id @default(cuid())
+  userId          String
+  subject         String                @db.VarChar(160)
+  category        SupportTicketCategory @default(OTHER)
+  status          SupportTicketStatus   @default(OPEN)
+  assignedAdminId String?
+  lastMessageAt   DateTime              @default(now())
+  resolvedAt      DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  user          User             @relation("SupportTicketOwner", fields: [userId], references: [id], onDelete: Restrict)
+  assignedAdmin User?            @relation("SupportTicketAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  messages      SupportMessage[]
+
+  @@index([status, lastMessageAt])
+  @@index([userId, createdAt])
+}
+
+model SupportMessage {
+  id         String            @id @default(cuid())
+  ticketId   String
+  authorId   String
+  authorRole SupportAuthorRole
+  body       String            @db.VarChar(2000)
+  createdAt  DateTime          @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User          @relation("SupportMessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, createdAt])
 }

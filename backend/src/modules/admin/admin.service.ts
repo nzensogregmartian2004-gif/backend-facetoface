@@ -3,7 +3,8 @@ import { prisma } from '../../config/db';
 import { env } from '../../config/env';
 import { badRequest, conflict, forbidden, notFound } from '../../utils/errors';
 
-import { isStaffAccount, requirePermission } from './roles';
+import { can, isStaffAccount, requirePermission, requireSuperAdmin } from './roles';
+import { redactRevenue } from './revenue';
 import type { AdminCandidate } from './permissions';
 function assertAdmin(user: AdminCandidate) { requirePermission(user, 'admin.access'); }
 
@@ -27,7 +28,8 @@ export async function dashboard(user: User) {
     prisma.withdrawal.groupBy({ by: ['status'], _count: { _all: true }, _sum: { amount: true, fee: true } }),
     prisma.report.groupBy({ by: ['status'], _count: { _all: true } }),
   ]);
-  return { users, creators, content: { videos, shorts, lives, views }, transactions: { count: transactions, totals: transactionTotals }, advertising: ads, premium, withdrawals, reports };
+  const revenue = redactRevenue(can(user, 'finance.revenue.view'), transactionTotals, withdrawals);
+  return { users, creators, content: { videos, shorts, lives, views }, transactions: { count: transactions, totals: revenue.totals }, advertising: ads, premium, withdrawals: revenue.withdrawals, reports };
 }
 
 export async function searchUsers(admin: User, input: any) {
@@ -51,6 +53,7 @@ export async function getUser(admin: User, id: string) {
 
 export async function setUserStatus(admin: User, id: string, input: any) {
   requirePermission(admin, input?.status === 'ACTIVE' ? 'users.reactivate' : 'users.suspend');
+  if (input?.status === 'BANNED' || input?.status === 'DELETED') requireSuperAdmin(admin);
   assertAdmin(admin);
   if (id === admin.id && input.status !== 'ACTIVE') throw badRequest('CANNOT_DISABLE_SELF', 'Un administrateur ne peut pas désactiver son propre compte');
   if (id !== admin.id && (await isStaffAccount(id))) throw forbidden('CANNOT_MODIFY_ADMIN', 'Un administrateur ne peut pas modifier le statut d’un autre administrateur');
@@ -68,9 +71,9 @@ export async function setUserStatus(admin: User, id: string, input: any) {
 }
 
 export async function setContentStatus(admin: User, type: 'VIDEO'|'SHORT', id: string, input: any) {
-  if (input?.status === 'REMOVED') requirePermission(admin, 'moderation.content.delete');
+  if (input?.status === 'REMOVED') requireSuperAdmin(admin);
   assertAdmin(admin); const model:any = type === 'VIDEO' ? prisma.video : prisma.short; const row = await model.findUnique({where:{id},select:{id:true,status:true}}); if (!row) throw notFound('Contenu introuvable');
-  const updated = await prisma.$transaction(async tx => { const m:any = type === 'VIDEO' ? tx.video : tx.short; const u = await m.update({where:{id},data:{status:input.status, ...(input.status==='PUBLISHED'?{publishedAt:new Date()}:{})}}); await tx.adminAuditLog.create({data:{adminId:admin.id,action:'CONTENT_STATUS_CHANGE',targetType:type,targetId:id,reason:input.reason||null,metadata:{from:row.status,to:input.status}}}); return u; }); return updated;
+  const updated = await prisma.$transaction(async tx => { const m:any = type === 'VIDEO' ? tx.video : tx.short; const u = await m.update({where:{id},data:{status:input.status, ...(input.status==='PUBLISHED'?{publishedAt:new Date()}:{}), removedAt: input.status==='REMOVED' ? new Date() : null}}); await tx.adminAuditLog.create({data:{adminId:admin.id,action:'CONTENT_STATUS_CHANGE',targetType:type,targetId:id,reason:input.reason||null,metadata:{from:row.status,to:input.status}}}); return u; }); return updated;
 }
 
 export async function listReports(admin: User, status?: string) { assertAdmin(admin); return prisma.report.findMany({ where: status ? { status: status as any } : {}, orderBy:{createdAt:'desc'}, take:200 }); }

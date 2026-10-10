@@ -132,3 +132,55 @@ export async function initAdminRolesFromEnv(): Promise<{ superAdmins: number }> 
   }
   return { superAdmins };
 }
+
+/**
+ * Contrôles de compte pour les routes d'administration hors /api/admin (publicité, Premium) :
+ * compte actif et sans mot de passe provisoire, comme gateAdminRoute. Un compte non administrateur
+ * passe ici puis est refusé par la permission demandée.
+ */
+export async function assertAdminAccountUsable(user: AdminCandidate, ctx?: { method?: string; path?: string }): Promise<void> {
+  const staff = roleFor(user) !== 'USER';
+  if (staff && user.adminStatus && user.adminStatus !== 'ACTIVE') {
+    await writeRefusal(user.id, 'admin.access', `Compte administrateur ${user.adminStatus.toLowerCase()}`, ctx);
+    throw forbidden('ADMIN_ACCOUNT_INACTIVE', 'Ce compte administrateur est suspendu ou désactivé');
+  }
+  if (staff && user.mustChangePassword) throw forbidden('PASSWORD_CHANGE_REQUIRED', 'Changez votre mot de passe avant de continuer');
+}
+
+/** Garde d'une permission donnée, pour une route hors /api/admin. */
+export const adminPermissionGuard = (p: AdminPermission): RequestHandler => async (req, _res, next) => {
+  try {
+    const user = actorOf(req);
+    const ctx = { method: req.method, path: req.path };
+    await assertAdminAccountUsable(user, ctx);
+    requirePermission(user, p, ctx);
+    next();
+  } catch (e) { next(e); }
+};
+
+/** Garde de compte administrateur sans permission précise : le service vérifie ensuite chaque permission. */
+export const adminAccountGuard: RequestHandler = async (req, _res, next) => {
+  try {
+    await assertAdminAccountUsable(actorOf(req), { method: req.method, path: req.path });
+    next();
+  } catch (e) { next(e); }
+};
+
+/** Garde qui accepte l'une ou l'autre des permissions données. */
+export const anyPermissionGuard = (ps: readonly AdminPermission[]): RequestHandler => async (req, _res, next) => {
+  try {
+    const user = actorOf(req);
+    const ctx = { method: req.method, path: req.path };
+    await assertAdminAccountUsable(user, ctx);
+    if (ps.some((p) => can(user, p))) { next(); return; }
+    requirePermission(user, ps[0], ctx);
+    next();
+  } catch (e) { next(e); }
+};
+
+/** Réservé au super administrateur : bannissement, suppression de compte, retrait de contenu. */
+export function requireSuperAdmin(u: AdminCandidate, ctx?: { method?: string; path?: string }): void {
+  if (roleFor(u) === 'SUPER_ADMIN') return;
+  logRefusal(u.id, 'admin.access', 'Action réservée au super administrateur', ctx);
+  throw forbidden('SUPER_ADMIN_REQUIRED', 'Réservé au super administrateur');
+}

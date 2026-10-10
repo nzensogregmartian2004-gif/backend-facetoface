@@ -214,3 +214,33 @@ export async function listViewers(host: User, liveId: string) {
     viewers: viewers.map((v) => ({ userId: v.userId, joinedAt: v.joinedAt, user: v.user, blocked: blockedSet.has(v.userId) })),
   };
 }
+
+/** Gains d'un direct : cadeaux reçus par type, brut, commission et net crédité. Montants en coins. Hôte seulement. */
+export async function liveRevenue(host: User, liveId: string) {
+  const live = await liveFor(liveId);
+  requireHost(host, live);
+  const rows = await prisma.coinGiftTransaction.groupBy({
+    by: ['giftId'],
+    where: { liveId },
+    _sum: { quantity: true, grossAmount: true, platformFee: true, creatorAmount: true },
+  });
+  const gifts = await prisma.gift.findMany({ where: { id: { in: rows.map((r) => r.giftId) } }, select: { id: true, name: true, symbol: true } });
+  const byId = new Map(gifts.map((g) => [g.id, g]));
+  const items = rows
+    .map((r) => ({
+      giftId: r.giftId,
+      name: byId.get(r.giftId)?.name ?? '',
+      symbol: byId.get(r.giftId)?.symbol ?? '',
+      count: r._sum.quantity ?? 0,
+      gross: r._sum.grossAmount ?? 0,
+      platformFee: r._sum.platformFee ?? 0,
+      creatorAmount: r._sum.creatorAmount ?? 0,
+    }))
+    .sort((a, b) => b.creatorAmount - a.creatorAmount);
+  const totals = items.reduce(
+    (t, i) => ({ count: t.count + i.count, gross: t.gross + i.gross, platformFee: t.platformFee + i.platformFee, creatorAmount: t.creatorAmount + i.creatorAmount }),
+    { count: 0, gross: 0, platformFee: 0, creatorAmount: 0 },
+  );
+  return { gifts: items, totals };
+}
+

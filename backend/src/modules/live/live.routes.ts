@@ -5,6 +5,8 @@ import { parse } from '../../utils/validate';
 import { chatSchema, createLiveSchema, liveListSchema, reactionSchema, updateLiveSchema } from './live.schemas';
 import * as svc from './live.service';
 import { closeLiveRoom } from './live.livekit';
+import { liveCapabilities } from './live.capabilities';
+import { env } from '../../config/env';
 
 export const liveRouter = Router();
 const me = (req: Parameters<typeof authed>[0]) => authed(req).user;
@@ -16,6 +18,8 @@ liveRouter.get('/', wrap(async (req, res) => {
 }));
 liveRouter.use(requireAuth);
 liveRouter.get('/mine', wrap(async (req, res) => { res.json(await svc.myLives(me(req))); }));
+/** Capacités du direct (vidéo activée ou non) : déclaré avant /:id pour ne pas être lu comme un identifiant. */
+liveRouter.get('/capabilities', wrap(async (_req, res) => res.json(liveCapabilities({ url: env.LIVEKIT_URL, apiKey: env.LIVEKIT_API_KEY, apiSecret: env.LIVEKIT_API_SECRET }))));
 liveRouter.get('/:id', wrap(async (req, res) => { res.json({ live: await svc.getLive(id(req), me(req)) }); }));
 liveRouter.post('/', wrap(async (req, res) => { res.status(201).json(await svc.createLive(me(req), createLiveSchema.parse(req.body))); }));
 liveRouter.patch('/:id', wrap(async (req, res) => { res.json({ live: await svc.updateLive(me(req), id(req), updateLiveSchema.parse(req.body)) }); }));

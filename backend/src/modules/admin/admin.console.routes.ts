@@ -7,6 +7,7 @@ import { parse } from '../../utils/validate';
 import { CATALOG, FAMILIES, PRESETS, effectivePermissions } from './permissions';
 import * as admins from './admins.service';
 import { legacyLists, permissionGuard, roleFor } from './roles';
+import { listCreatorBalances } from './balances';
 
 /** Console d'administration : profil, catalogue, administrateurs, Lives, créateurs, journal. Chaque route exige sa permission. */
 export const adminConsoleRouter = Router();
@@ -123,4 +124,15 @@ adminConsoleRouter.get('/audit', permissionGuard('audit.view'), wrap(async (req,
   const hasMore = rows.length > q.limit;
   const items = rows.slice(0, q.limit);
   res.json({ items, nextCursor: hasMore ? items[items.length - 1].id : null });
+}));
+
+const balancesQuery = z.object({
+  q: z.string().trim().max(80).optional(),
+  currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/).optional(),
+  limit,
+});
+/** Soldes des portefeuilles créateurs, en lecture seule. Montants en unités de la plus petite devise. */
+adminConsoleRouter.get('/balances', permissionGuard('finance.balances.view'), wrap(async (req, res) => {
+  const q = parse(balancesQuery, req.query);
+  res.json({ wallets: await listCreatorBalances(q) });
 }));

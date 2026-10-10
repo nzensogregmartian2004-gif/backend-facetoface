@@ -11,6 +11,8 @@ type DB = Prisma.TransactionClient | typeof prisma;
 const reference = () => `P${Date.now().toString(36).slice(-7)}${randomBytes(3).toString('hex')}`.toUpperCase();
 const DEFAULT_BENEFITS = { adFree: true, premiumBadge: true };
 import { actorById, requirePermission } from '../admin/roles';
+import { pickFields, recordAdminChange } from '../admin/adminAudit';
+import { settingsPermissionsFor } from './premium.permissions';
 
 async function setting(db: DB) {
   return db.premiumSetting.upsert({ where: { id: 'default' }, create: { id: 'default', monthlyPriceMinor: env.PREMIUM_DEFAULT_MONTHLY_PRICE, annualPriceMinor: env.PREMIUM_DEFAULT_ANNUAL_PRICE, currency: 'XAF', trialDays: env.PREMIUM_DEFAULT_TRIAL_DAYS, benefits: DEFAULT_BENEFITS }, update: {} });
@@ -19,8 +21,14 @@ const dto = (s: any) => ({ id: s.id, status: s.status, billingPeriod: s.billingP
 
 export async function getSettings() { const s = await setting(prisma); return { ...s, benefits: { ...DEFAULT_BENEFITS, ...(s.benefits as any ?? {}) } }; }
 export async function updateSettings(userId: string, input: any) {
-  requirePermission(await actorById(userId), input.monthlyPriceMinor !== undefined || input.annualPriceMinor !== undefined ? 'finance.premium.prices.update' : 'premium.subscriptions.manage');
-  return prisma.premiumSetting.upsert({ where: { id: 'default' }, create: { id: 'default', monthlyPriceMinor: input.monthlyPriceMinor ?? env.PREMIUM_DEFAULT_MONTHLY_PRICE, annualPriceMinor: input.annualPriceMinor ?? env.PREMIUM_DEFAULT_ANNUAL_PRICE, currency: input.currency ?? 'XAF', trialDays: input.trialDays ?? env.PREMIUM_DEFAULT_TRIAL_DAYS, benefits: { ...DEFAULT_BENEFITS, ...(input.benefits ?? {}) }, ...input, updatedByUserId: userId }, update: { ...input, benefits: input.benefits ? { ...DEFAULT_BENEFITS, ...input.benefits } : undefined, updatedByUserId: userId } });
+  const { reason, ...changes } = input;
+  const actor = await actorById(userId);
+  for (const p of settingsPermissionsFor(changes)) requirePermission(actor, p, { method: 'PATCH', path: '/api/premium/admin/settings' });
+  const before = await setting(prisma);
+  const benefits = changes.benefits ? { ...DEFAULT_BENEFITS, ...((before.benefits as Record<string, unknown>) ?? {}), ...changes.benefits } : undefined;
+  const after = await prisma.premiumSetting.update({ where: { id: 'default' }, data: { ...changes, ...(benefits ? { benefits } : {}), updatedByUserId: userId } });
+  await recordAdminChange({ adminId: userId, action: 'PATCH settings', targetType: 'PREMIUM_SETTING', targetId: 'default', reason, module: 'premium', oldValue: pickFields(before, Object.keys(changes)), newValue: changes });
+  return after;
 }
 
 export async function getMySubscription(user: User) {
@@ -113,6 +121,21 @@ export async function settlePremiumPayment(ref:string,outcome:{status:'SUCCESS'|
   });
 }
 
-export async function createPromotion(user:User,input:any){ requirePermission(user, 'finance.premium.prices.update'); if(input.endsAt<=input.startsAt) throw badRequest('INVALID_PROMOTION_DATES','La fin doit être après le début'); if(input.type==='PERCENT' && input.value>10000) throw badRequest('INVALID_PROMOTION_VALUE','Pourcentage maximal : 100 %'); return prisma.premiumPromotion.create({data:{...input,createdById:user.id}}); }
+export async function createPromotion(user:User,input:any){
+  requirePermission(user, 'finance.premium.prices.update', { method: 'POST', path: '/api/premium/admin/promotions' });
+  const { reason, ...data } = input;
+  if(data.endsAt<=data.startsAt) throw badRequest('INVALID_PROMOTION_DATES','La fin doit être après le début');
+  if(data.type==='PERCENT' && data.value>10000) throw badRequest('INVALID_PROMOTION_VALUE','Pourcentage maximal : 100 %');
+  const promotion = await prisma.premiumPromotion.create({data:{...data,createdById:user.id}});
+  await recordAdminChange({ adminId: user.id, action: 'CREATE promotion', targetType: 'PREMIUM_PROMOTION', targetId: promotion.id, reason, module: 'premium', newValue: data });
+  return promotion;
+}
 export async function listPromotions(user:User){ requirePermission(user, 'premium.subscriptions.manage'); return prisma.premiumPromotion.findMany({orderBy:{createdAt:'desc'},take:200}); }
-export async function setPromotionStatus(user:User,id:string,isActive:boolean){ requirePermission(user, 'finance.premium.prices.update'); return prisma.premiumPromotion.update({where:{id},data:{isActive}}); }
+export async function setPromotionStatus(user:User,id:string,isActive:boolean,reason:string){
+  requirePermission(user, 'finance.premium.prices.update', { method: 'PATCH', path: '/api/premium/admin/promotions/:id' });
+  const before = await prisma.premiumPromotion.findUnique({ where: { id } });
+  if (!before) throw notFound('Promotion Premium introuvable');
+  const promotion = await prisma.premiumPromotion.update({ where: { id }, data: { isActive } });
+  await recordAdminChange({ adminId: user.id, action: 'PATCH promotion status', targetType: 'PREMIUM_PROMOTION', targetId: id, reason, module: 'premium', oldValue: { isActive: before.isActive }, newValue: { isActive } });
+  return promotion;
+}

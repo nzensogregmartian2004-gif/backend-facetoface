@@ -10,5 +10,13 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  // Legacy monétisation « cadeaux en argent » : non monté dans app.ts, aucun importeur, remplacé par le module coins
+  // (GiftTransaction n'est plus lu que par ce code). Mis à l'écart de la compilation, sans suppression : à retirer
+  // ou à reconstruire sur coins (décision à prendre). Ne pas réimporter ces fichiers sans les corriger.
+  "exclude": [
+    "src/modules/monetization/gifts.routes.ts",
+    "src/modules/monetization/gifts.service.ts",
+    "src/modules/monetization/gifts.schemas.ts"
+  ]
 }

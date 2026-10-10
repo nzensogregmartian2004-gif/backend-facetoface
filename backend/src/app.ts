@@ -21,6 +21,8 @@ import { messagesRouter } from './modules/messages/messages.routes';
 import { groupsRouter } from './modules/messages/groups.routes';
 import { groupCallsRouter } from './modules/groupCalls/groupCalls.routes';
 import { disputesRouter } from './modules/admin/disputes.routes';
+import { disputeResponseRouter } from './modules/disputes/disputeResponse.routes';
+import { contentPurgeRouter } from './modules/admin/contentPurge';
 import { adminCoinsRouter } from './modules/coins/coins.admin.routes';
 import { certificationRouter } from './modules/certification/certification.routes';
 import { audienceRouter } from './modules/audience/audience.routes';
@@ -42,6 +44,7 @@ import { configRouter } from './modules/config/config.routes';
 import { premiumRouter } from './modules/premium/premium.routes';
 import { coinsRouter } from './modules/coins/coins.routes';
 import { usersRouter } from './modules/users/users.routes';
+import { supportRouter, supportAdminRouter } from './modules/support/support.routes';
 import { uploadRoot } from './utils/storage';
 
 export function createApp() {
@@ -103,6 +106,10 @@ export function createApp() {
   app.use('/api/admin', adminConsoleRouter);
 app.use('/api/admin/config', configRouter);
   app.use('/api/admin/disputes', disputesRouter);
+  app.use('/api/disputes', disputeResponseRouter);
+  app.use('/api/admin/content', contentPurgeRouter);
+  app.use('/api/admin/support', supportAdminRouter);
+  app.use('/api/support', supportRouter);
   app.use('/api/admin/coins', adminCoinsRouter);
   app.use('/api/admin/certification', certificationRouter);
   app.use('/api/creator/audience', audienceRouter);

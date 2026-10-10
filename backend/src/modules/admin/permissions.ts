@@ -158,6 +158,12 @@ export function permissionForAdminPath(method: string, path: string): AdminPermi
     if (m === 'PATCH' && /\/status$/.test(path)) return 'admins.deactivate';
     return 'admins.update';
   }
+  if (/^\/balances(\/|$)/.test(path)) return 'finance.balances.view';
+  if (/^\/support(\/|$)/.test(path)) {
+    if (read) return 'support.tickets.view';
+    if (m === 'PATCH' && /\/status$/.test(path)) return 'support.tickets.status';
+    return 'support.tickets.reply';
+  }
   if (/^\/config(\/|$)/.test(path)) return read ? 'config.view' : 'admin.access';
   return 'admin.access';
 }

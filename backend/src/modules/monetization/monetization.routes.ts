@@ -9,6 +9,7 @@ import * as views from './views.service';
 import { requirePermission } from '../admin/roles';
 import { adRevenueSchema, poolPeriodSchema, poolSettingSchema, monetizationConditionUpdateSchema } from './monetization.schemas';
 import * as eligibility from './eligibility.service';
+import { recordAdminChange } from '../admin/adminAudit';
 
 export const monetizationRouter = Router();
 monetizationRouter.get('/settings', wrap(async (_req, res) => { res.json(svc.publicMonetizationSettings()); }));
@@ -50,9 +51,20 @@ monetizationRouter.patch('/admin/conditions', wrap(async (req, res) => {
   const p = monetizationConditionUpdateSchema.parse(req.body);
   res.json({ setting: await eligibility.setMonetizationCondition(p.key, p.value, me(req).id, p.reason) });
 }));
+monetizationRouter.get('/admin/creator/:creatorId/eligibility', wrap(async (req, res) => {
+  requirePermission(me(req), 'creators.eligibility.review');
+  res.json(await eligibility.getCreatorEligibilityReview(String(req.params.creatorId)));
+}));
 monetizationRouter.post('/admin/creator/:creatorId/eligibility-review', wrap(async (req, res) => {
   requirePermission(me(req), 'creators.eligibility.review');
-  const status = z.object({ status: z.enum(['APPROVED', 'REJECTED']), rejectionReason: z.string().trim().max(500).optional() }).parse(req.body);
-  res.json({ eligibility: await eligibility.reviewCreatorEligibility(req.params.creatorId, status.status, me(req).id, status.rejectionReason) });
+  const status = z.object({
+    status: z.enum(['APPROVED', 'REJECTED']),
+    rejectionReason: z.string().trim().max(500).optional(),
+  }).refine((v) => v.status !== 'REJECTED' || (v.rejectionReason ?? '').length >= 5, { message: 'Motif de refus obligatoire (5 caractères minimum)', path: ['rejectionReason'] }).parse(req.body);
+  const creatorId = String(req.params.creatorId);
+  const review = await eligibility.reviewCreatorEligibility(creatorId, status.status, me(req).id, status.rejectionReason);
+  // Décision de monétisation : journalisée (cahier § 36).
+  await recordAdminChange({ adminId: me(req).id, action: 'REVIEW creator eligibility', targetType: 'CREATOR', targetId: creatorId, reason: status.rejectionReason ?? null, module: 'monetization', newValue: { status: status.status } });
+  res.json({ eligibility: review });
 }));
 

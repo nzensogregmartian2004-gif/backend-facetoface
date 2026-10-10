@@ -22,6 +22,5 @@ adminRouter.patch('/reports/:id',wrap(async(req,res)=>res.json({report:await svc
 adminRouter.patch('/fraud/users/:id',wrap(async(req,res)=>{guard(req);res.json({user:await svc.setFraudStatus(me(req),String(req.params.id),parse(fraudStatusSchema,req.body).status,parse(fraudStatusSchema,req.body).reason)})}));
 adminRouter.get('/fraud/events',wrap(async(req,res)=>{guard(req);res.json({events:await fraud.listEvents(parse(fraudEventListQuerySchema,req.query))})}));
 adminRouter.get('/transactions',wrap(async(req,res)=>res.json({transactions:await svc.listTransactions(me(req),parse(transactionQuerySchema,req.query))})));
-adminRouter.post('/transactions/:id/refund-review',wrap(async(req,res)=>res.json({transaction:await svc.requestRefundReview(me(req),String(req.params.id),parse(refundRequestSchema,req.body).reason)})));
 adminRouter.get('/withdrawals',wrap(async(req,res)=>res.json({withdrawals:await svc.listWithdrawals(me(req),parse(withdrawalListQuerySchema,req.query).status)})));
 adminRouter.patch('/withdrawals/:id',wrap(async(req,res)=>res.json(await svc.setWithdrawalStatus(me(req),String(req.params.id),parse(withdrawalStatusSchema,req.body)))));
