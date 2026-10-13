@@ -50,7 +50,7 @@ export async function groupDto(viewer: User, conv: any) {
   const cardById = new Map(cards.map((c: any) => [c.id, c]));
   return {
     id: conv.id, isGroup: true, name: conv.name, photoKey: conv.photoKey, description: conv.description,
-    allowPaidContent: conv.allowPaidContent, unreadCount: me.unreadCount, lastMessageAt: conv.lastMessageAt,
+    allowPaidContent: conv.allowPaidContent, adminsOnlyPosting: conv.adminsOnlyPosting, unreadCount: me.unreadCount, lastMessageAt: conv.lastMessageAt,
     entry: conv.entryPrice != null ? { price: conv.entryPrice, currency: conv.entryCurrency ?? DEFAULT_CURRENCY } : null, isOwner: conv.ownerId === viewer.id, owner: conv.ownerId ? (cardById.get(conv.ownerId) ?? null) : null,
     members: conv.members.map((m: any) => ({ id: m.userId, role: m.role, user: cardById.get(m.userId) ?? null })),
     memberCount: conv.members.length, myRole: me.role,
@@ -63,12 +63,13 @@ export async function getGroup(viewer: User, conversationId: string) {
   return { group: await groupDto(viewer, conv) };
 }
 
-export async function updateGroup(viewer: User, conversationId: string, input: { name?: string; description?: string | null; allowPaidContent?: boolean; photoKey?: string | null; entryPrice?: number | null }) {
+export async function updateGroup(viewer: User, conversationId: string, input: { name?: string; description?: string | null; allowPaidContent?: boolean; adminsOnlyPosting?: boolean; photoKey?: string | null; entryPrice?: number | null }) {
   await admin(viewer, conversationId);
   const data: Prisma.ConversationUpdateInput = {};
   if (input.name !== undefined) { const name = input.name.trim(); if (!name) throw badRequest('GROUP_NAME_REQUIRED', 'Nom du groupe requis'); data.name = name; }
   if (input.description !== undefined) data.description = input.description?.trim() || null;
   if (input.allowPaidContent !== undefined) data.allowPaidContent = input.allowPaidContent;
+  if (input.adminsOnlyPosting !== undefined) data.adminsOnlyPosting = input.adminsOnlyPosting;
   if (input.entryPrice !== undefined) { // accès payant : seuls les nouveaux membres paient ; les membres présents restent admis
     if (input.entryPrice === null) { data.entryPrice = null; data.entryCurrency = null; }
     else { assertPriceInRange(input.entryPrice, DEFAULT_CURRENCY, env.PAID_MESSAGE_MIN_FCFA, env.PAID_MESSAGE_MAX_FCFA, 'GROUP_PRICE_INVALID', 'entryPrice'); data.entryPrice = input.entryPrice; data.entryCurrency = DEFAULT_CURRENCY; }

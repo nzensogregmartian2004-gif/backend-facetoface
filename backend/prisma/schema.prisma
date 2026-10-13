@@ -315,6 +315,10 @@ enum ModerationContentStatus {
 }
 
 model User {
+  posts                Post[]
+  postVotes            PostVote[]
+  dislikes             Dislike[]
+  savedContents        SavedContent[]
   id                 String            @id @default(cuid())
   email              String            @unique
   username           String            @unique
@@ -406,6 +410,11 @@ model User {
   coinWallet             CoinWallet?
   coinLedgerEntries      CoinLedgerEntry[]
   coinPurchases           CoinPurchase[]
+  callMinuteOffers         CallMinuteOffer[]    @relation("MinuteOfferCreator")
+  callMinuteAccountsBought CallMinuteAccount[]  @relation("MinuteAccountBuyer")
+  callMinuteAccountsSold   CallMinuteAccount[]  @relation("MinuteAccountCreator")
+  callMinutePurchasesMade  CallMinutePurchase[] @relation("MinutePurchaseBuyer")
+  callMinutePurchasesSold  CallMinutePurchase[] @relation("MinutePurchaseCreator")
   coinGiftTransactionsSent CoinGiftTransaction[] @relation("CoinGiftSender")
   coinGiftTransactionsReceived CoinGiftTransaction[] @relation("CoinGiftCreator")
   coinTipTransactionsSent CoinTipTransaction[] @relation("CoinTipSender")
@@ -428,6 +437,11 @@ model User {
   supportTickets         SupportTicket[]      @relation("SupportTicketOwner")
   supportAssignedTickets SupportTicket[]      @relation("SupportTicketAssignee")
   supportMessages        SupportMessage[]     @relation("SupportMessageAuthor")
+  pollVotes              PollVote[]           @relation("PollVoter")
+  callFavorites          CallFavorite[]       @relation("CallFavoriteOwner")
+  callFavoritedBy        CallFavorite[]       @relation("CallFavoriteTarget")
+  scheduledCallsMade     ScheduledCall[]      @relation("ScheduleCaller")
+  scheduledCallsReceived ScheduledCall[]      @relation("ScheduleCreator")
   moderationActionsTargetUser ModerationAction[] @relation("ModerationTargetUser")
   monetizationSettingVersions MonetizationSettingVersion[] @relation("MonetizationVersionAdmin")
 
@@ -1133,6 +1147,14 @@ model Like {
 
 // Suppression douce (deletedAt) : le texte reste disponible pour la modération (signalements).
 model Comment {
+  parentId   String?
+  replyToId  String?
+  replyCount Int       @default(0)
+  parent     Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    Comment[] @relation("CommentReplies")
+  replyTo    Comment?  @relation("CommentReplyTarget", fields: [replyToId], references: [id], onDelete: SetNull)
+  repliedBy  Comment[] @relation("CommentReplyTarget")
+  @@index([parentId, createdAt])
   id         String            @id @default(cuid())
   authorId   String
   targetType ContentTargetType
@@ -1243,6 +1265,7 @@ model ShortWatchEvent {
 
 // Fondation minimale pour le feed « Abonnements ». Compteurs, listes et écrans : étape 4.
 model Follow {
+  notifyOn    Boolean  @default(false)
   id          String   @id @default(cuid())
   followerId  String
   followingId String
@@ -1545,6 +1568,10 @@ model Withdrawal {
 enum MessageKind {
   TEXT
   MEDIA
+  POLL
+  EVENT
+  LOCATION
+  STICKER
 }
 
 enum PurchaseStatus {
@@ -1570,6 +1597,7 @@ enum CoinPurchaseStatus {
 }
 
 enum NotificationType {
+  NEW_CONTENT
   NEW_MESSAGE
   MESSAGE_PURCHASED
   CREATOR_SUBSCRIPTION_PURCHASED
@@ -1613,6 +1641,7 @@ model Conversation {
   photoKey          String?   @db.VarChar(300)
   description       String?   @db.VarChar(500)
   allowPaidContent  Boolean   @default(true)
+  adminsOnlyPosting Boolean   @default(false)
   /// Messages éphémères de la conversation, en secondes (null = désactivé). Ne s'applique qu'aux messages envoyés après le réglage.
   disappearingSeconds Int?
   /// Accès payant : prix d'entrée (unités mineures), null = gratuit. Les membres déjà présents ne sont pas concernés.
@@ -1649,6 +1678,7 @@ model ConversationMember {
   lastDeliveredAt     DateTime?
   /// Archivée pour ce membre (sort de la boîte principale ; un nouveau message la ramène).
   archivedAt          DateTime?
+  favoriteAt DateTime?
   @@unique([conversationId, userId])
   @@index([userId, hiddenAt])
   @@index([conversationId, role])
@@ -1665,6 +1695,13 @@ model Message {
   mediaKey       String?
   mediaMime      String?
   mediaSize      Int?
+  latitude       Float?
+  longitude      Float?
+  placeLabel     String?
+  eventTitle     String?
+  eventStartsAt  DateTime?
+  eventPlace     String?
+  previewKey     String?
   /// Durée déclarée par le client pour un vocal ou une vidéo (ms). Non vérifiée : la taille du fichier est la seule limite.
   mediaDurationMs Int?
   price      Int?
@@ -1695,6 +1732,7 @@ model Message {
   replies         Message[] @relation("MessageReply")
   forwardedFrom   Message?  @relation("MessageForward", fields: [forwardedFromId], references: [id], onDelete: SetNull)
   forwards        Message[] @relation("MessageForward")
+  poll           Poll?
   @@unique([senderId, clientId])
   @@index([conversationId, createdAt])
   @@index([expiresAt])
@@ -1769,6 +1807,20 @@ model Notification {
 enum CallType {
   AUDIO
   VIDEO
+}
+
+enum CallMinuteEntryType {
+  PURCHASE
+  INCLUDED_GRANT
+  CALL_DEBIT
+  CALL_CREDIT
+}
+
+enum CallMinutePurchaseStatus {
+  PENDING
+  PAID
+  FAILED
+  REVIEW
 }
 
 enum CallPricingMode {
@@ -1888,6 +1940,8 @@ model Call {
   caller User @relation("Caller", fields: [callerId], references: [id], onDelete: Restrict)
   callee User @relation("Callee", fields: [calleeId], references: [id], onDelete: Restrict)
 
+  callerHiddenAt DateTime?
+  calleeHiddenAt DateTime?
   @@index([callerId, createdAt])
   @@index([calleeId, createdAt])
   @@index([calleeId, status])
@@ -2615,4 +2669,210 @@ model SupportMessage {
   author User          @relation("SupportMessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
 
   @@index([ticketId, createdAt])
+}
+
+/// Sondage attaché à un message : une question, des options, et les votes des membres.
+model Poll {
+  id            String       @id @default(cuid())
+  messageId     String       @unique
+  question      String       @db.VarChar(200)
+  allowMultiple Boolean      @default(false)
+  closedAt      DateTime?
+  message       Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  options       PollOption[]
+}
+
+model PollOption {
+  id       String     @id @default(cuid())
+  pollId   String
+  text     String     @db.VarChar(100)
+  position Int
+  poll     Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes    PollVote[]
+
+  @@index([pollId])
+}
+
+model PollVote {
+  id        String     @id @default(cuid())
+  optionId  String
+  userId    String
+  createdAt DateTime   @default(now())
+  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user      User       @relation("PollVoter", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([optionId, userId])
+}
+
+/// Favori d'appel : une personne que l'utilisateur veut appeler en un geste.
+model CallFavorite {
+  id        String   @id @default(cuid())
+  ownerId   String
+  userId    String
+  createdAt DateTime @default(now())
+  owner     User     @relation("CallFavoriteOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  target    User     @relation("CallFavoriteTarget", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, userId])
+}
+
+enum ScheduledCallStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+}
+
+/// Appel planifié : un client demande un créneau, le créateur accepte ou refuse. Aucun paiement à la réservation.
+model ScheduledCall {
+  id              String              @id @default(cuid())
+  callerId        String
+  creatorId       String
+  type            CallType
+  startsAt        DateTime
+  durationMinutes Int
+  status          ScheduledCallStatus @default(PENDING)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  caller          User                @relation("ScheduleCaller", fields: [callerId], references: [id], onDelete: Cascade)
+  creator         User                @relation("ScheduleCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@index([creatorId, status, startsAt])
+  @@index([callerId, startsAt])
+}
+
+/// Dislike (pouce bas) : un par utilisateur et par contenu. Jamais de compteur public.
+model Dislike {
+  id         String            @id @default(cuid())
+  userId     String
+  targetType ContentTargetType
+  targetId   String
+  createdAt  DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@index([userId, createdAt])
+}
+
+/// Enregistrer une vidéo ou un Short pour plus tard (bibliothèque).
+model SavedContent {
+  id         String            @id @default(cuid())
+  userId     String
+  targetType ContentTargetType
+  targetId   String
+  createdAt  DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, targetType, targetId])
+  @@index([userId, createdAt])
+}
+
+/// Post texte : texte, sondage facultatif (options en JSON), image facultative.
+model Post {
+  id          String            @id @default(cuid())
+  authorId    String
+  text        String
+  pollOptions Json?
+  imageKey    String?
+  visibility  ContentVisibility @default(PUBLIC)
+  createdAt   DateTime          @default(now())
+  deletedAt   DateTime?
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  votes  PostVote[]
+
+  @@index([authorId, createdAt])
+}
+
+/// Vote sur le sondage d'un post : un vote par utilisateur et par post.
+model PostVote {
+  id          String   @id @default(cuid())
+  postId      String
+  userId      String
+  optionIndex Int
+  createdAt   DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([postId, optionIndex])
+}
+
+model CallMinuteOffer {
+  id        String   @id @default(cuid())
+  creatorId String
+  kind      CallType
+  seconds   Int
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creator   User                 @relation("MinuteOfferCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  purchases CallMinutePurchase[]
+
+  @@unique([creatorId, kind, seconds])
+  @@index([creatorId, kind, active])
+}
+
+model CallMinuteAccount {
+  id             String   @id @default(cuid())
+  userId         String
+  creatorId      String
+  kind           CallType
+  balanceSeconds Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  user    User              @relation("MinuteAccountBuyer", fields: [userId], references: [id], onDelete: Cascade)
+  creator User              @relation("MinuteAccountCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  entries CallMinuteEntry[]
+
+  @@unique([userId, creatorId, kind])
+  @@index([creatorId, kind])
+}
+
+model CallMinutePurchase {
+  id              String                   @id @default(cuid())
+  reference       String                   @unique
+  userId          String
+  creatorId       String
+  kind            CallType
+  offerId         String
+  seconds         Int
+  grossAmount     Int
+  currency        String                   @db.VarChar(3)
+  status          CallMinutePurchaseStatus @default(PENDING)
+  operator        String?
+  payerPhoneHint  String?
+  externalRef     String?
+  initiatedAt     DateTime                 @default(now())
+  paidAt          DateTime?
+  reviewReason    String?
+  providerPayload Json?
+
+  buyer   User            @relation("MinutePurchaseBuyer", fields: [userId], references: [id], onDelete: Restrict)
+  creator User            @relation("MinutePurchaseCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  offer   CallMinuteOffer @relation(fields: [offerId], references: [id], onDelete: Restrict)
+
+  @@index([userId, creatorId, status, initiatedAt])
+  @@index([status, initiatedAt])
+}
+
+model CallMinuteEntry {
+  id           String              @id @default(cuid())
+  accountId    String
+  type         CallMinuteEntryType
+  seconds      Int
+  balanceAfter Int
+  sourceType   String?
+  sourceId     String?
+  createdAt    DateTime            @default(now())
+
+  account CallMinuteAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, createdAt])
 }

@@ -67,6 +67,7 @@ export const commentSchema = z.object({
   text: z.string().trim().min(1, 'Commentaire vide').max(500, '500 caractères maximum').optional(),
   audioKey: z.string().min(1).max(300).optional(),
   durationMs: z.number().int().min(1, 'Durée invalide').optional(),
+  replyToId: z.string().min(1).max(64).optional(),
 }).strict().refine((v) => Number(v.text !== undefined) + Number(v.audioKey !== undefined) === 1, { message: 'Un commentaire est soit du texte, soit un vocal' });
 export const commentAudioUrlSchema = z.object({
   targetType: z.enum(['VIDEO', 'SHORT']),

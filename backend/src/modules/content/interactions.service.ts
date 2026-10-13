@@ -15,6 +15,7 @@ const counter = async (kind: Kind, id: string, field: 'likeCount' | 'viewCount' 
 export async function like(user: User, kind: Kind, id: string) {
   await loadInteractive(user, kind, id);
   await prisma.$transaction(async (tx) => {
+    await tx.dislike.deleteMany({ where: { userId: user.id, targetType: kind, targetId: id } });
     const r = await tx.like.createMany({ data: [{ userId: user.id, targetType: kind, targetId: id }], skipDuplicates: true });
     if (r.count === 1) await repo(tx, kind).update({ where: { id }, data: { likeCount: { increment: 1 } } });
   });
@@ -57,4 +58,34 @@ export async function share(user: User, kind: Kind, id: string) {
   if (row.visibility === 'PRIVATE') throw forbidden('SHARE_NOT_ALLOWED', 'Un contenu privé ne peut pas être partagé');
   await repo(prisma, kind).update({ where: { id }, data: { shareCount: { increment: 1 } } });
   return { shareCount: await counter(kind, id, 'shareCount'), shareUrl: shareUrl(kind, id) };
+}
+
+/** Pouce bas : retire un éventuel pouce haut (et son compteur). Le nombre de pouces bas n'est jamais exposé. */
+export async function dislike(user: User, kind: Kind, id: string) {
+  await loadInteractive(user, kind, id);
+  await prisma.$transaction(async (tx) => {
+    const removed = await tx.like.deleteMany({ where: { userId: user.id, targetType: kind, targetId: id } });
+    if (removed.count === 1) await repo(tx, kind).update({ where: { id }, data: { likeCount: { decrement: 1 } } });
+    await tx.dislike.createMany({ data: [{ userId: user.id, targetType: kind, targetId: id }], skipDuplicates: true });
+  });
+  return { disliked: true, liked: false, likeCount: await counter(kind, id, 'likeCount') };
+}
+
+/** Retirer son pouce bas : sans contrôle de visibilité, pour qu'un contenu devenu privé reste rectifiable. */
+export async function undislike(user: User, kind: Kind, id: string) {
+  await prisma.dislike.deleteMany({ where: { userId: user.id, targetType: kind, targetId: id } });
+  return { disliked: false, likeCount: await counter(kind, id, 'likeCount') };
+}
+
+/** Enregistrer pour plus tard. Le contenu doit être publié et visible pour cet utilisateur. */
+export async function save(user: User, kind: Kind, id: string) {
+  await loadInteractive(user, kind, id);
+  await prisma.savedContent.createMany({ data: [{ userId: user.id, targetType: kind, targetId: id }], skipDuplicates: true });
+  return { saved: true };
+}
+
+/** Retirer de la liste : sans contrôle de visibilité, pour qu'un contenu supprimé ou devenu privé reste retirable. */
+export async function unsave(user: User, kind: Kind, id: string) {
+  await prisma.savedContent.deleteMany({ where: { userId: user.id, targetType: kind, targetId: id } });
+  return { saved: false };
 }

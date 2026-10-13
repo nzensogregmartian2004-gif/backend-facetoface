@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../src/config/db';
 import { env } from '../src/config/env';
 import { api, creatorSignedIn, memStore, resetDb, settle, signedIn } from './helpers';
@@ -6,7 +6,12 @@ import { api, creatorSignedIn, memStore, resetDb, settle, signedIn } from './hel
 beforeEach(resetDb);
 
 const PAY = { operator: 'AIRTEL_MONEY', phone: '060123456' };
-const CALL = { operator: 'AIRTEL_MONEY', phone: '077123456' };
+// Présence : le créateur est en ligne pour recevoir l'appel (le serveur refuse un créateur hors ligne).
+const presence = vi.hoisted(() => ({ offline: new Set<string>() }));
+vi.mock('../src/realtime/realtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/realtime/realtime')>()),
+  isUserOnline: (userId: string) => !presence.offline.has(userId),
+}));
 
 describe('Étape 24 — parcours end-to-end', () => {
   it('inscription → connexion → recherche → suivi → abonnement → vidéo → message payant → appel → revenus → portefeuille → retrait', async () => {
@@ -72,18 +77,28 @@ describe('Étape 24 — parcours end-to-end', () => {
     expect(purchase.status).toBe(200);
     expect(purchase.body.purchase.status).toBe('PAID');
 
-    // Appel : paiement, acceptation, token et fin de session.
+    // Appel : minutes achetées chez le créateur (compte de minutes), sonnerie sans paiement, décroché, fin.
     const callSettings = await api().put('/api/calls/me/settings').set(creator.auth).send({
       pricingMode: 'PER_MINUTE', audioPrice: 100, maxDurationMinutes: 10, access: 'EVERYONE', isAvailable: true,
     });
     expect(callSettings.status).toBe(200);
-    const callRequest = await api().post('/api/calls').set(fanRegistration.auth).send({ calleeId: creator.user.id, type: 'AUDIO', minutes: 1, ...CALL });
-    expect(callRequest.status).toBe(202);
+    await prisma.callMinuteAccount.upsert({
+      where: { userId_creatorId_kind: { userId: fanRegistration.user.id, creatorId: creator.user.id, kind: 'AUDIO' } },
+      create: { userId: fanRegistration.user.id, creatorId: creator.user.id, kind: 'AUDIO', balanceSeconds: 120 },
+      update: { balanceSeconds: 120 },
+    });
+    const callRequest = await api().post('/api/calls').set(fanRegistration.auth).send({ calleeId: creator.user.id, type: 'AUDIO' });
+    expect(callRequest.status).toBe(201);
     const callId = callRequest.body.call.id as string;
-    expect((await settle((await prisma.call.findUniqueOrThrow({ where: { id: callId } })).reference!, 'SUCCESS', { amount: 100 })).status).toBe(200);
     expect((await api().post(`/api/calls/${callId}/accept`).set(creator.auth).send({})).status).toBe(200);
+    // Une minute passée : 60 secondes sont débitées (100 F la minute), les 60 autres restent sur le compte.
+    await prisma.call.update({ where: { id: callId }, data: { answeredAt: new Date(Date.now() - 60_000) } });
     expect((await api().post(`/api/calls/${callId}/token`).set(fanRegistration.auth).send({})).status).toBe(200);
     expect((await api().post(`/api/calls/${callId}/end`).set(fanRegistration.auth).send({})).status).toBe(200);
+    const account = await prisma.callMinuteAccount.findUniqueOrThrow({
+      where: { userId_creatorId_kind: { userId: fanRegistration.user.id, creatorId: creator.user.id, kind: 'AUDIO' } },
+    });
+    expect(account.balanceSeconds).toBe(60);
 
     // Revenus créateur puis portefeuille et retrait.
     const earnings = await api().get('/api/monetization/creator/earnings?currency=XAF').set(creator.auth);

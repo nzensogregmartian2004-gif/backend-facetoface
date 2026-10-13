@@ -16,6 +16,7 @@ import * as follows from './follow.service';
 import * as profiles from './profile.service';
 import { suggestCreators } from './suggestions.service';
 import * as svc from './users.service';
+import * as postsSvc from '../posts/posts.service';
 import { isCurrencyCode } from '../monetization/currency';
 import { BANNER_MAX_BYTES, featuredSchema } from './channel.schemas';
 
@@ -104,6 +105,7 @@ usersRouter.delete('/:id/block', wrap(async (req, res) => { await svc.unblockUse
 
 usersRouter.post('/:id/follow', wrap(async (req, res) => { await follows.follow(authed(req).user, String(req.params.id)); res.status(204).end(); }));
 usersRouter.delete('/:id/follow', wrap(async (req, res) => { await follows.unfollow(authed(req).user, String(req.params.id)); res.status(204).end(); }));
+usersRouter.patch('/:id/follow/notifications', wrap(async (req, res) => { await follows.setNotifications(authed(req).user, String(req.params.id), (req.body as { enabled?: unknown } | undefined)?.enabled); res.status(204).end(); }));
 
 const profileContentQuery = pageQuerySchema.extend({ sort: z.enum(['recent', 'popular']).default('recent') });
 
@@ -120,6 +122,7 @@ usersRouter.get('/popular', wrap(async (req, res) => {
 }));
 
 usersRouter.get('/:username/followers', wrap(async (req, res) => { res.json(await profiles.listRelations(authed(req).user, uname(req), 'followers', parse(pageQuerySchema, req.query))); }));
+usersRouter.get('/:username/posts', wrap(async (req, res) => { res.json(await postsSvc.listByAuthor(authed(req).user, uname(req), parse(pageQuerySchema, req.query))); }));
 usersRouter.get('/:username/following', wrap(async (req, res) => { res.json(await profiles.listRelations(authed(req).user, uname(req), 'following', parse(pageQuerySchema, req.query))); }));
 usersRouter.get('/:username/videos', wrap(async (req, res) => { res.json(await profiles.listProfileContent(authed(req).user, uname(req), 'VIDEO', parse(profileContentQuery, req.query))); }));
 usersRouter.get('/:username/shorts', wrap(async (req, res) => { res.json(await profiles.listProfileContent(authed(req).user, uname(req), 'SHORT', parse(profileContentQuery, req.query))); }));

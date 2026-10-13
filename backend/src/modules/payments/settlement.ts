@@ -8,6 +8,7 @@ import { settleCustomVideoPayment } from '../customVideos/customVideos.service';
 import { settlePremiumPayment } from '../premium/premium.service';
 import { syncPaymentTransaction } from '../wallet/wallet.service';
 import { settleCoinPurchase } from '../coins/coins.service';
+import { settleMinutePurchase } from '../calls/callMinutes.service';
 import { assessActivity, holdPaymentReference } from '../fraud/fraud.service';
 
 export type SettleOutcome = { status: 'SUCCESS' | 'FAILED'; /** Montant confirmé par le prestataire, s'il l'indique. */ amount?: number; providerRef?: string; payload?: unknown };
@@ -75,7 +76,9 @@ export async function settleReference(reference: string, o: SettleOutcome): Prom
               ? await prisma.coinPurchase.findUnique({ where: { reference }, select: { userId: true } })
               : reference.startsWith('G')
                 ? await prisma.groupAccessPurchase.findUnique({ where: { reference }, select: { buyerId: true } })
-                : await prisma.messagePurchase.findUnique({ where: { reference }, select: { buyerId: true } });
+                : reference.startsWith('N')
+              ? await prisma.callMinutePurchase.findUnique({ where: { reference }, select: { userId: true } })
+              : await prisma.messagePurchase.findUnique({ where: { reference }, select: { buyerId: true } });
     const userId = actor && ('callerId' in actor ? actor.callerId : 'buyerId' in actor ? actor.buyerId : actor.userId);
     if (userId) {
       const risk = await assessActivity(userId, 'PAYMENT', {});
@@ -88,6 +91,7 @@ export async function settleReference(reference: string, o: SettleOutcome): Prom
   else if (reference.startsWith('V')) result = await settleCustomVideoPayment(reference, o);
   else if (reference.startsWith('P')) result = await settlePremiumPayment(reference, o);
   else if (reference.startsWith('K')) result = await settleCoinPurchase(reference, o);
+  else if (reference.startsWith('N')) result = await settleMinutePurchase(reference, o);
   else if (reference.startsWith('G')) result = await settleGroupAccess(reference, o);
   else result = await settlePurchase(reference, o);
   if (result !== 'unknown') {

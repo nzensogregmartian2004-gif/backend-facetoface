@@ -24,3 +24,10 @@ export async function follow(viewer: User, targetId: string) {
 export async function unfollow(viewer: User, targetId: string) {
   await prisma.follow.deleteMany({ where: { followerId: viewer.id, followingId: targetId } });
 }
+
+/** Cloche : notifications pour les nouveaux contenus de cette chaîne. Réservé aux abonnés. */
+export async function setNotifications(viewer: User, targetId: string, enabled: unknown) {
+  if (typeof enabled !== 'boolean') throw badRequest('INVALID_INPUT', 'Le champ enabled doit être un booléen');
+  const r = await prisma.follow.updateMany({ where: { followerId: viewer.id, followingId: targetId }, data: { notifyOn: enabled } });
+  if (r.count === 0) throw badRequest('NOT_FOLLOWING', 'Abonnez-vous à cette chaîne pour activer les notifications');
+}

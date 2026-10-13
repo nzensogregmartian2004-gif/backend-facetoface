@@ -1,3 +1,7 @@
+import { pushNewMessage } from './messages.push';
+import { mayPostInGroup } from './groups.rules';
+import { isPreviewKeyFor, PREVIEW_MAX_BYTES } from './messages.preview';
+import { extractUrls } from './messages.links';
 import { Prisma, type Message, type User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { env } from '../../config/env';
@@ -110,7 +114,7 @@ export async function getConversation(viewer: User, id: string) {
 }
 
 /** Boîte de réception : conversations ayant au moins un message, non masquées, sans compte inactif ni blocage ; plus récentes d'abord. */
-export async function listConversations(viewer: User, o: { cursor?: string; limit: number; archived?: string }) {
+export async function listConversations(viewer: User, o: { cursor?: string; limit: number; archived?: string; filter?: 'all' | 'unread' | 'groups' | 'favorites'; q?: string }) {
   const blocked = await blockedIdsFor(viewer.id);
   const c = decodeCursor(o.cursor);
   if (c && (typeof c.t !== 'number' || typeof c.i !== 'string')) throw badRequest('INVALID_CURSOR', 'Curseur de pagination invalide');
@@ -121,6 +125,15 @@ export async function listConversations(viewer: User, o: { cursor?: string; limi
     NOT: { AND: [{ isGroup: false }, { members: { some: { userId: { not: viewer.id }, OR: [{ userId: { in: blocked } }, { user: { status: { not: 'ACTIVE' } } }] } } }] },
     ...(t ? { OR: [{ lastMessageAt: { lt: t } }, { lastMessageAt: t, id: { lt: String(c!.i) } }] } : {}),
   };
+  // Filtre « Non lues » : conversations où le viewer a des messages non lus. « Groupes » : groupes seulement.
+  if (o.filter === 'unread' || o.filter === 'favorites') where.members = { some: { userId: viewer.id, hiddenAt: null, archivedAt: o.archived === '1' ? { not: null } : null, ...(o.filter === 'unread' ? { unreadCount: { gt: 0 } } : { favoriteAt: { not: null } }) } };
+  if (o.filter === 'groups') where.isGroup = true;
+  // Recherche : nom du groupe, ou nom et identifiant de l'autre personne. Combinée au curseur via AND.
+  const q = o.q?.trim();
+  if (q) where.AND = [{ OR: [
+    { isGroup: true, name: { contains: q, mode: 'insensitive' } },
+    { isGroup: false, members: { some: { userId: { not: viewer.id }, user: { OR: [{ displayName: { contains: q, mode: 'insensitive' } }, { username: { contains: q, mode: 'insensitive' } }] } } } },
+  ] }];
   const rows = await prisma.conversation.findMany({ where, orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }], take: o.limit + 1, include: { members: { include: { user: true } } } });
   const page = rows.slice(0, o.limit);
   const lastIds = page.map((r) => r.lastMessageId).filter((x): x is string => !!x);
@@ -137,7 +150,7 @@ export async function listConversations(viewer: User, o: { cursor?: string; limi
   const items = page.map((r) => {
     const me = r.members.find((m) => m.userId === viewer.id)!;
     const last = r.lastMessageId ? byId.get(r.lastMessageId) ?? null : null;
-    const base = { id: r.id, unreadCount: me.unreadCount, lastMessageAt: r.lastMessageAt, lastMessage: previewOf(last, viewer, last ? bought.has(last.id) : false) };
+    const base = { id: r.id, unreadCount: me.unreadCount, lastMessageAt: r.lastMessageAt, favorite: me.favoriteAt != null, lastMessage: previewOf(last, viewer, last ? bought.has(last.id) : false) };
     if (r.isGroup) return { ...base, isGroup: true, name: r.name, photoKey: r.photoKey, memberCount: r.members.length, other: null };
     return { ...base, isGroup: false, name: null, photoKey: null, memberCount: r.members.length, other: cardByConv.get(r.id) ?? null };
   });
@@ -196,7 +209,7 @@ export async function requestMediaUpload(viewer: User, b: { conversationId: stri
   return { upload: { ...objectStorage.presignUpload(key, b.contentType, env.UPLOAD_URL_TTL_SECONDS), key } };
 }
 
-type SendInput = { text?: string; mediaKey?: string; price?: number; currency?: string; clientId?: string; viewOnce?: boolean; durationMs?: number };
+type SendInput = { text?: string; sticker?: string; mediaKey?: string; previewKey?: string; poll?: { question: string; options: string[]; allowMultiple?: boolean }; event?: { title: string; startsAt: Date; place?: string }; location?: { latitude: number; longitude: number; label?: string }; price?: number; currency?: string; clientId?: string; viewOnce?: boolean; durationMs?: number };
 
 export async function sendMessage(viewer: User, conversationId: string, b: SendInput) {
   if (b.clientId) {
@@ -204,6 +217,7 @@ export async function sendMessage(viewer: User, conversationId: string, b: SendI
     if (dup) return { created: false, message: (await serializeMessages([dup], viewer))[0] };
   }
   const { conv, me, other } = await loadConversation(viewer, conversationId);
+  if (!mayPostInGroup({ isGroup: conv.isGroup, adminsOnlyPosting: conv.adminsOnlyPosting, role: me.role, isOwner: conv.ownerId === viewer.id })) throw forbidden('POSTING_ADMINS_ONLY', 'Seuls les administrateurs peuvent publier dans ce groupe');
   if (other) {
     const perm = await messagingPermission(viewer, other.user);
     if (!perm.allowed) {
@@ -242,13 +256,22 @@ export async function sendMessage(viewer: User, conversationId: string, b: SendI
     media = { key: b.mediaKey, mime, size: info.size };
   }
 
+  // Aperçu flouté : seulement avec un média payant, émis pour CET expéditeur et CETTE conversation, et petit.
+  let previewKey: string | null = null;
+  if (b.previewKey) {
+    if (!media || b.price == null || !isPreviewKeyFor(b.previewKey, conversationId, viewer.id)) throw badRequest('INVALID_PREVIEW', 'Aperçu invalide');
+    const pinfo = await objectStorage.head(b.previewKey);
+    if (!pinfo || pinfo.size < 1 || pinfo.size > PREVIEW_MAX_BYTES) { await dropObject(b.previewKey); throw badRequest('INVALID_PREVIEW', 'Aperçu invalide'); }
+    previewKey = b.previewKey;
+  }
+
   const now = new Date();
   try {
     const msg = await prisma.$transaction(async (tx) => {
       const m = await tx.message.create({
         data: {
-          conversationId, senderId: viewer.id, kind: media ? 'MEDIA' : 'TEXT', text: b.text || null,
-          mediaKey: media?.key ?? null, mediaMime: media?.mime ?? null, mediaSize: media?.size ?? null, mediaDurationMs: media ? b.durationMs ?? null : null,
+          conversationId, senderId: viewer.id, kind: b.poll ? 'POLL' : b.event ? 'EVENT' : b.location ? 'LOCATION' : b.sticker ? 'STICKER' : media ? 'MEDIA' : 'TEXT', text: b.sticker ?? (b.text || null), latitude: b.location?.latitude ?? null, longitude: b.location?.longitude ?? null, placeLabel: b.location?.label ?? null, eventTitle: b.event?.title ?? null, eventStartsAt: b.event?.startsAt ?? null, eventPlace: b.event?.place ?? null, poll: b.poll ? { create: { question: b.poll.question, allowMultiple: b.poll.allowMultiple ?? false, options: { create: b.poll.options.map((text, position) => ({ text, position })) } } } : undefined,
+          previewKey, mediaKey: media?.key ?? null, mediaMime: media?.mime ?? null, mediaSize: media?.size ?? null, mediaDurationMs: media ? b.durationMs ?? null : null,
           price: b.price ?? null, currency: b.price != null ? (b.currency ?? DEFAULT_CURRENCY) : null, clientId: b.clientId ?? null, viewOnce: b.viewOnce === true, replyToId: null, createdAt: now, expiresAt: !b.viewOnce && conv.disappearingSeconds ? new Date(now.getTime() + conv.disappearingSeconds * 1000) : null,
         },
       });
@@ -262,6 +285,7 @@ export async function sendMessage(viewer: User, conversationId: string, b: SendI
       for (const userId of recipients) await notify(tx, { userId, type: 'NEW_MESSAGE', actorId: viewer.id, targetType: 'CONVERSATION', targetId: conversationId });
       return m;
     });
+    void pushNewMessage(conversationId, viewer.id).catch((err) => console.error('[push] nouveau message', err));
     return { created: true, message: (await serializeMessages([msg], viewer))[0] };
   } catch (e) {
     if (isUnique(e) && b.clientId) { // deux envois simultanés avec le même clientId : on renvoie le premier
@@ -471,6 +495,7 @@ export async function forwardMessage(viewer: User, messageId: string, targetConv
   const paidLocked = source.price != null && source.senderId !== viewer.id && !(await prisma.messagePurchase.findFirst({ where: { messageId, buyerId: viewer.id, status: 'PAID' }, select: { id: true } }));
   if (paidLocked) throw forbidden('MESSAGE_LOCKED', 'Déverrouillez le message avant de le transférer');
   const created = await prisma.message.create({ data: { conversationId: targetConversationId, senderId: viewer.id, kind: source.kind, text: source.text, mediaKey: source.mediaKey, mediaMime: source.mediaMime, mediaSize: source.mediaSize, mediaDurationMs: source.mediaDurationMs, forwardedFromId: source.id, expiresAt: target.conv.disappearingSeconds ? new Date(Date.now() + target.conv.disappearingSeconds * 1000) : null } });
+  void pushNewMessage(targetConversationId, viewer.id).catch((err) => console.error('[push] transfert', err));
   await prisma.conversation.update({ where: { id: target.conv.id }, data: { lastMessageAt: created.createdAt, lastMessageId: created.id } });
   await prisma.conversationMember.updateMany({ where: { conversationId: targetConversationId, userId: viewer.id }, data: { hiddenAt: null, lastReadAt: new Date(), unreadCount: 0 } });
   await prisma.conversationMember.updateMany({ where: { conversationId: targetConversationId, userId: { not: viewer.id } }, data: { unreadCount: { increment: 1 } } });
@@ -556,4 +581,83 @@ export async function listStarred(viewer: User, o: { conversationId?: string; li
     include: { message: true },
   });
   return { items: await serializeMessages(rows.map((r) => r.message), viewer) };
+}
+
+/** « Tout marquer comme lu » : remet à zéro les non-lus du viewer, et prévient les autres membres (coches bleues). */
+export async function markAllRead(viewer: User) {
+  const mine = await prisma.conversationMember.findMany({ where: { userId: viewer.id, unreadCount: { gt: 0 } }, select: { conversationId: true } });
+  const ids = mine.map((m) => m.conversationId);
+  if (ids.length === 0) return { count: 0 };
+  const convs = await prisma.conversation.findMany({ where: { id: { in: ids } }, select: { id: true, members: { select: { userId: true } } } });
+  await prisma.$transaction(async (tx) => {
+    await tx.conversationMember.updateMany({ where: { userId: viewer.id, conversationId: { in: ids } }, data: { unreadCount: 0, lastReadAt: new Date() } });
+    for (const id of ids) await markTargetRead(tx, viewer.id, 'NEW_MESSAGE', id);
+  });
+  for (const c of convs) {
+    publishRealtimeMany(c.members.filter((m) => m.userId !== viewer.id).map((m) => m.userId), { type: 'RECEIPT', payload: { conversationId: c.id } });
+  }
+  return { count: ids.length };
+}
+
+/** Met une conversation en favori, ou la retire, pour le seul membre qui le demande. */
+export async function setFavorite(viewer: User, conversationId: string, favorite: boolean) {
+  await loadConversation(viewer, conversationId);
+  await prisma.conversationMember.updateMany({ where: { conversationId, userId: viewer.id }, data: { favoriteAt: favorite ? new Date() : null } });
+  return { favorite };
+}
+
+/**
+ * Médias (photos, vidéos) et liens partagés. Mêmes règles d'accès que la liste des messages, et en plus :
+ * pas de vue unique, pas de média payant (son aperçu reste réservé à l'achat).
+ */
+export async function listShared(viewer: User, id: string, o: { cursor?: string; limit: number; kind: 'media' | 'links' }) {
+  const { me } = await loadConversation(viewer, id);
+  const cursorId = readIdCursor(o.cursor);
+  const common: Prisma.MessageWhereInput[] = [
+    { conversationId: id }, { moderationStatus: 'ACTIVE' }, { deletedAt: null },
+    { hiddenFor: { none: { userId: viewer.id } } },
+    { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+    ...(me.clearedAt ? [{ createdAt: { gt: me.clearedAt } }] : []),
+  ];
+  const specific: Prisma.MessageWhereInput[] = o.kind === 'media'
+    ? [{ kind: 'MEDIA' }, { viewOnce: false }, { price: null }, { OR: [{ mediaMime: { startsWith: 'image/' } }, { mediaMime: { startsWith: 'video/' } }] }]
+    : [{ kind: 'TEXT' }, { OR: [{ text: { contains: 'http://' } }, { text: { contains: 'https://' } }] }];
+  const rows = await prisma.message.findMany({
+    where: { AND: [...common, ...specific] },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: o.limit + 1,
+    ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+  });
+  const page = rows.slice(0, o.limit);
+  const nextCursor = rows.length > o.limit ? idCursor(page[page.length - 1].id) : null;
+  if (o.kind === 'media') return { items: await serializeMessages(page, viewer), nextCursor };
+  return {
+    items: page.map((m) => ({ id: m.id, createdAt: m.createdAt, mine: m.senderId === viewer.id, text: m.text ?? '', urls: extractUrls(m.text ?? '') })),
+    nextCursor,
+  };
+}
+
+/** Vote sur un sondage : remplace le vote précédent du membre. Sondage clos ou choix multiple non autorisé : refusé. */
+export async function votePoll(viewer: User, messageId: string, optionIds: string[]) {
+  const m = await prisma.message.findUnique({ where: { id: messageId }, select: { id: true, conversationId: true, poll: { select: { id: true, allowMultiple: true, closedAt: true, options: { select: { id: true } } } } } });
+  if (!m?.poll) throw notFound('Sondage introuvable');
+  await loadConversation(viewer, m.conversationId);
+  if (m.poll.closedAt) throw conflict('POLL_CLOSED', 'Ce sondage est clos');
+  const valid = new Set(m.poll.options.map((o) => o.id));
+  const ids = [...new Set(optionIds)];
+  if (ids.length !== optionIds.length || !ids.every((id) => valid.has(id))) throw badRequest('INVALID_OPTION', 'Option invalide');
+  if (!m.poll.allowMultiple && ids.length !== 1) throw badRequest('SINGLE_CHOICE', 'Un seul choix possible');
+  await prisma.$transaction([
+    prisma.pollVote.deleteMany({ where: { userId: viewer.id, option: { pollId: m.poll.id } } }),
+    prisma.pollVote.createMany({ data: ids.map((optionId) => ({ optionId, userId: viewer.id })) }),
+  ]);
+  return { ok: true };
+}
+
+/** Clôture d'un sondage : réservée à son auteur. Les votes restent visibles. */
+export async function closePoll(viewer: User, messageId: string) {
+  const m = await prisma.message.findUnique({ where: { id: messageId }, select: { senderId: true, poll: { select: { id: true, closedAt: true } } } });
+  if (!m?.poll) throw notFound('Sondage introuvable');
+  if (m.senderId !== viewer.id) throw forbidden('NOT_SENDER', 'Seul l’auteur peut clore le sondage');
+  await prisma.poll.update({ where: { id: m.poll.id }, data: { closedAt: m.poll.closedAt ?? new Date() } });
+  return { ok: true };
 }

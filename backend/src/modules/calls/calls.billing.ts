@@ -31,3 +31,16 @@ export function billCall(b: BillingInput, actualSeconds: number, minBillableSeco
   const split = splitAmount(consumedAmount, b.commissionBps);
   return { consumedAmount, refundAmount: b.grossAmount - consumedAmount, commissionAmount: split.platformFeeAmount, creatorAmount: split.creatorAmount, billedMinutes };
 }
+
+/**
+ * Décompte à la seconde d'un appel payé en minutes (nouveau modèle). Fonction pure, entiers FCFA.
+ * Sous le seuil facturable : rien n'est débité. Sinon le montant = prix de la minute × secondes / 60 (au moins 1 F).
+ * Invariant : montant = commission + créateur.
+ */
+export function billSeconds(rate: number, seconds: number, minBillableSeconds: number, commissionBps: number) {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s === 0 || s < minBillableSeconds) return { consumedSeconds: 0, consumedAmount: 0, commissionAmount: 0, creatorAmount: 0 };
+  const consumedAmount = Math.max(1, Math.round((rate * s) / 60));
+  const split = splitAmount(consumedAmount, commissionBps);
+  return { consumedSeconds: s, consumedAmount, commissionAmount: split.platformFeeAmount, creatorAmount: split.creatorAmount };
+}

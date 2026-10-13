@@ -41,7 +41,7 @@ export async function settleCallPayment(reference: string, o: SettleOutcome): Pr
       const busy = !stale && (await tx.call.count({ where: { id: { not: c.id }, status: { in: ['RINGING', 'ACTIVE'] }, OR: [{ calleeId: c.calleeId }, { callerId: c.calleeId }] } })) > 0;
       const paid = { paymentStatus: 'PAID' as const, paidAt: now, reviewReason: null, providerPayload: payload, ...(o.providerRef ? { externalRef: o.providerRef } : {}) };
       const next = stale || busy
-        ? { status: 'MISSED' as const, endReason: stale ? ('STALE_PAYMENT' as const) : ('CREATOR_BUSY' as const), endedAt: now, consumedAmount: 0, commissionAmount: 0, creatorAmount: 0, refundAmount: c.grossAmount, refundStatus: 'DUE' as const }
+        ? { status: 'MISSED' as const, endReason: stale ? ('STALE_PAYMENT' as const) : ('CREATOR_BUSY' as const), endedAt: now, consumedAmount: 0, commissionAmount: c.grossAmount, creatorAmount: 0, refundAmount: 0, refundStatus: 'NONE' as const }
         : { status: 'RINGING' as const, ringExpiresAt: new Date(now.getTime() + env.CALL_RING_SECONDS * 1000) };
       const r = await tx.call.updateMany({ where: { id: c.id, paymentStatus: { in: ['PENDING', 'REVIEW'] } }, data: { ...paid, ...next } });
       return r.count === 1 ? 'paid' : 'already';

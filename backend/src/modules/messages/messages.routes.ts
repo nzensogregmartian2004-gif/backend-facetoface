@@ -3,7 +3,7 @@ import { authed, requireAuth } from '../../middleware/auth';
 import { messageLimiter, unlockLimiter, uploadLimiter } from '../../middleware/rateLimit';
 import { wrap } from '../../utils/async';
 import { body, parse } from '../../utils/validate';
-import { editMessageSchema, inboxQuerySchema, mediaUrlSchema, messagesQuerySchema, openConversationSchema, sendMessageSchema, unlockSchema, reactionSchema, disappearingSchema, muteSchema, starSchema, archiveSchema } from './messages.schemas';
+import { editMessageSchema, inboxQuerySchema, mediaUrlSchema, messagesQuerySchema, openConversationSchema, sendMessageSchema, unlockSchema, reactionSchema, disappearingSchema, muteSchema, starSchema, archiveSchema, favoriteSchema, sharedQuerySchema, voteSchema } from './messages.schemas';
 import * as svc from './messages.service';
 
 export const messagesRouter = Router();
@@ -18,7 +18,10 @@ messagesRouter.get('/conversations/unread-count', wrap(async (req, res) => { res
 messagesRouter.post('/conversations', messageLimiter, wrap(async (req, res) => { res.json(await svc.openConversation(me(req), body(openConversationSchema, req).userId)); }));
 messagesRouter.get('/conversations/:id', wrap(async (req, res) => { res.json(await svc.getConversation(me(req), id(req))); }));
 messagesRouter.delete('/conversations/:id', wrap(async (req, res) => { await svc.hideConversation(me(req), id(req)); res.status(204).end(); }));
+messagesRouter.post('/conversations/read-all', wrap(async (req, res) => { res.json(await svc.markAllRead(me(req))); }));
+messagesRouter.post('/conversations/:id/favorite', wrap(async (req, res) => { res.json(await svc.setFavorite(me(req), id(req), body(favoriteSchema, req).favorite)); }));
 messagesRouter.post('/conversations/:id/read', wrap(async (req, res) => { await svc.markRead(me(req), id(req)); res.status(204).end(); }));
+messagesRouter.get('/conversations/:id/shared', wrap(async (req, res) => { res.json(await svc.listShared(me(req), id(req), parse(sharedQuerySchema, req.query))); }));
 messagesRouter.get('/conversations/:id/messages', wrap(async (req, res) => { res.json(await svc.listMessages(me(req), id(req), parse(messagesQuerySchema, req.query))); }));
 messagesRouter.post('/conversations/:id/messages', messageLimiter, wrap(async (req, res) => {
   const r = await svc.sendMessage(me(req), id(req), body(sendMessageSchema, req));
@@ -39,6 +42,8 @@ messagesRouter.post('/conversations/:id/mute', wrap(async (req, res) => { res.js
 messagesRouter.post('/conversations/:id/disappearing', wrap(async (req, res) => { res.json(await svc.setDisappearing(me(req), id(req), body(disappearingSchema, req).seconds)); }));
 messagesRouter.post('/conversations/:id/lock', wrap(async (req, res) => { const locked = Boolean((req.body as any)?.locked); res.json(await svc.setChatLock(me(req), id(req), locked)); }));
 messagesRouter.get('/conversations/:id/export', wrap(async (req, res) => { res.json(await svc.exportConversation(me(req), id(req))); }));
+messagesRouter.post('/messages/:id/vote', messageLimiter, wrap(async (req, res) => { res.json(await svc.votePoll(me(req), id(req), body(voteSchema, req).optionIds)); }));
+messagesRouter.post('/messages/:id/poll/close', wrap(async (req, res) => { res.json(await svc.closePoll(me(req), id(req))); }));
 messagesRouter.post('/messages/:id/reaction', wrap(async (req, res) => { res.json(await svc.reactToMessage(me(req), id(req), body(reactionSchema, req).emoji)); }));
 messagesRouter.post('/messages/:id/edit', wrap(async (req, res) => { res.json({ message: await svc.editMessage(me(req), id(req), body(editMessageSchema, req).text) }); }));
 messagesRouter.post('/messages/:id/pin', wrap(async (req, res) => { res.json(await svc.pinMessage(me(req), id(req))); }));

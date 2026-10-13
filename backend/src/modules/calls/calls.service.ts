@@ -1,21 +1,21 @@
-import { assertMobileMoneyCurrency, DEFAULT_CURRENCY, formatAmountText, limitIn, SUPPORTED_CURRENCIES } from '../../utils/currency';
-import { randomBytes } from 'node:crypto';
+import { DEFAULT_CURRENCY, formatAmountText, limitIn, SUPPORTED_CURRENCIES } from '../../utils/currency';
 import type { Call, CreatorCallSettings, Prisma, User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { env } from '../../config/env';
 import { callProvider } from '../../utils/callProvider';
 import { decodeCursor, encodeCursor } from '../../utils/cursor';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../../utils/errors';
-import { payments, type MobileOperator } from '../../utils/payments';
+import { payments } from '../../utils/payments';
 import { blockedIdsFor } from '../content/access';
 import { toUserCards } from '../users/profile.service';
-import { billCall, prepaidAmount } from './calls.billing';
+import { billCall, billSeconds } from './calls.billing';
+import { creatorRate } from './callMinutes.service';
+import { isUserOnline } from '../../realtime/realtime';
 import { lockUser } from './calls.lock';
 import { serializeCall } from './calls.serializer';
 import { recordPaidCallEarning } from '../monetization/monetization.service';
 
 /** Référence marchand : ≤ 13 caractères (exigence MyPVit), unique, non devinable. Préfixe `C` = appel (les messages payants utilisent `M`). */
-const newReference = () => `C${Date.now().toString(36).slice(-6)}${randomBytes(3).toString('hex')}`.toUpperCase();
 
 const IN_PROGRESS = ['AWAITING_PAYMENT', 'RINGING', 'ACTIVE'] as const;
 const LIVE = ['RINGING', 'ACTIVE'] as const;
@@ -119,7 +119,7 @@ export async function getOffer(viewer: User, calleeId: string) {
   if (!e.allowed) return { offer: null, canCall: false, reason: { code: e.code, message: e.message } };
   const busy = await creatorBusy(prisma, callee.id);
   const d = settingsDto(e.settings);
-  const reason = !s.enabled ? { code: 'CALLS_NOT_CONFIGURED', message: 'Les appels ne sont pas encore disponibles' } : busy ? { code: 'CREATOR_BUSY', message: 'Ce créateur est en ligne avec quelqu’un d’autre' } : null;
+  const reason = !s.enabled ? { code: 'CALLS_NOT_CONFIGURED', message: 'Les appels ne sont pas encore disponibles' } : !isUserOnline(callee.id) ? { code: 'CREATOR_OFFLINE', message: 'Ce créateur est hors ligne' } : busy ? { code: 'CREATOR_BUSY', message: 'Ce créateur est en ligne avec quelqu’un d’autre' } : null;
   return { offer: { pricingMode: d.pricingMode, currency: d.currency, audioPrice: d.audioPrice, videoPrice: d.videoPrice, maxDurationMinutes: d.maxDurationMinutes, access: d.access, busy }, canCall: !reason, reason };
 }
 
@@ -139,17 +139,59 @@ async function loadParticipant(viewer: User, id: string): Promise<Call> {
 }
 
 // ── Échéances : sonnerie expirée, durée maximale atteinte ──────────
-/** Clôt un appel qui n'a pas été décroché : rien n'est consommé, tout le prépayé est à rembourser. */
+/** Clôt un appel qui n'a pas été décroché : rien n'est consommé ni versé au créateur, et rien n'est remboursé (tout achat est définitif). */
 async function closeUnanswered(c: Call, status: 'MISSED' | 'DECLINED' | 'CANCELLED', reason: 'RING_TIMEOUT' | 'DECLINED' | 'CANCELLED', at: Date): Promise<boolean> {
   const r = await prisma.call.updateMany({
     where: { id: c.id, status: 'RINGING' },
-    data: { status, endReason: reason, endedAt: at, ringExpiresAt: null, consumedAmount: 0, commissionAmount: 0, creatorAmount: 0, refundAmount: c.grossAmount, refundStatus: 'DUE' },
+    data: { status, endReason: reason, endedAt: at, ringExpiresAt: null, consumedAmount: 0, commissionAmount: c.grossAmount, creatorAmount: 0, refundAmount: 0, refundStatus: 'NONE' },
   });
   return r.count === 1;
 }
 
-/** Clôt un appel en cours et en fixe le décompte d'après la durée réelle (plafonnée à la durée prépayée). */
+/** Durée maximale d'un appel payé en minutes : le solde de l'appelant, plafonné par le réglage du créateur. */
+async function accountCapSeconds(c: Call): Promise<number> {
+  const acc = await prisma.callMinuteAccount.findUnique({ where: { userId_creatorId_kind: { userId: c.callerId, creatorId: c.calleeId, kind: c.type } } });
+  const s = await prisma.creatorCallSettings.findUnique({ where: { userId: c.calleeId }, select: { maxDurationMinutes: true } });
+  const maxSeconds = Math.min(s?.maxDurationMinutes ?? 30, env.CALL_MAX_DURATION_MINUTES) * 60;
+  return Math.min(acc?.balanceSeconds ?? 0, maxSeconds);
+}
+
+/** Débite le compte de minutes de l'appelant (au plus une fois par appel : appelé uniquement dans la transaction de clôture). */
+async function debitMinutes(tx: Prisma.TransactionClient, c: Call, seconds: number): Promise<void> {
+  const acc = await tx.callMinuteAccount.findUnique({ where: { userId_creatorId_kind: { userId: c.callerId, creatorId: c.calleeId, kind: c.type } } });
+  if (!acc || acc.balanceSeconds < seconds) throw new Error(`[appels] solde de minutes insuffisant au décompte de l'appel ${c.id}`);
+  const updated = await tx.callMinuteAccount.update({ where: { id: acc.id }, data: { balanceSeconds: { decrement: seconds } } });
+  await tx.callMinuteEntry.create({ data: { accountId: acc.id, type: 'CALL_DEBIT', seconds: -seconds, balanceAfter: updated.balanceSeconds, sourceType: 'CALL', sourceId: c.id } });
+}
+
+/** Clôt un appel en cours : décompte à la seconde du compte de minutes (nouveau modèle). Les appels de l'ancien modèle suivent endLegacy. */
 async function endActive(c: Call, at: Date, reason: 'HANGUP' | 'MAX_DURATION'): Promise<boolean> {
+  if (c.reference) return endLegacy(c, at, reason);
+  const started = c.answeredAt ?? at;
+  const capSeconds = Math.round(((c.endsAt ?? at).getTime() - started.getTime()) / 1000);
+  const elapsed = Math.max(0, Math.floor((at.getTime() - started.getTime()) / 1000));
+  const actual = Math.max(0, Math.min(capSeconds, elapsed));
+  const bill = billSeconds(c.unitPrice, actual, env.CALL_MIN_BILLABLE_SECONDS, c.commissionBps);
+  // Clôture, débit et revenu du créateur dans UNE transaction : jamais de tâche lancée en arrière-plan.
+  const r = await prisma.$transaction(async (tx) => {
+    const u = await tx.call.updateMany({
+      where: { id: c.id, status: 'ACTIVE' },
+      data: { status: 'ENDED', endReason: reason, endedAt: at, actualSeconds: actual, consumedAmount: bill.consumedAmount, commissionAmount: bill.commissionAmount, creatorAmount: bill.creatorAmount, refundAmount: 0, refundStatus: 'NONE' },
+    });
+    if (u.count !== 1) return u;
+    if (bill.consumedSeconds > 0) await debitMinutes(tx, c, bill.consumedSeconds);
+    if (bill.creatorAmount > 0) {
+      await recordPaidCallEarning(tx, { id: c.id, calleeId: c.calleeId, consumedAmount: bill.consumedAmount, commissionAmount: bill.commissionAmount, creatorAmount: bill.creatorAmount, commissionBps: c.commissionBps, currency: c.currency });
+    }
+    return u;
+  });
+  if (r.count === 1) await Promise.resolve(callProvider.closeRoom(c.id)).catch((e) => console.error('[appel] fermeture de salle échouée', c.id, e));
+  return r.count === 1;
+}
+
+/** Ancien modèle (paiement par appel) : appels déjà en cours au moment de la mise à jour. */
+/** Clôt un appel en cours et en fixe le décompte d'après la durée réelle (plafonnée à la durée prépayée). */
+async function endLegacy(c: Call, at: Date, reason: 'HANGUP' | 'MAX_DURATION'): Promise<boolean> {
   const started = c.answeredAt ?? at;
   const actual = Math.min(c.requestedMinutes * 60, Math.max(0, Math.floor((at.getTime() - started.getTime()) / 1000)));
   const bill = billCall(c, actual, env.CALL_MIN_BILLABLE_SECONDS);
@@ -203,58 +245,41 @@ export function startCallSweeper(): NodeJS.Timeout | null {
   return t;
 }
 
-// ── Demande d'appel et paiement ─────────────────────────────────
+// ── Demande d'appel (minutes du client, débit à la fin de l'appel) ─
 /**
- * Demande d'appel. Le prix est calculé ICI d'après les réglages du créateur (jamais fourni par le client) et prépayé en Mobile Money (asynchrone).
- * Réponses : 202 `{ call }` paiement lancé (le client valide sur son téléphone, résultat par webhook ; le mobile sonde `GET /api/calls/:id`),
- * 200 si déjà confirmé ; 402 refus net (aucun débit) ; 403 appel non autorisé ; 409 occupé / appel ou paiement déjà en cours ; 502-503 prestataire indisponible ou non configuré.
- * Garanties : jamais de service avant PAID (le créateur ne sonne qu'après confirmation) ; jamais de nouvel essai sur un paiement dont le sort est inconnu.
+ * Demande d'appel. Aucun paiement ici : le client doit avoir des minutes de ce type chez ce créateur.
+ * Réponses : 201 `{ call }` (la sonnerie part tout de suite) ; 402 NO_MINUTES ; 403 appel non autorisé ;
+ * 409 créateur hors ligne, occupé, ou appel déjà en cours ; 503 appels non configurés.
+ * Rien n'est débité à la demande ni au décroché : le décompte se fait à la fin, à la seconde.
  */
-export async function requestCall(viewer: User, input: { calleeId: string; type: 'AUDIO' | 'VIDEO'; minutes?: number; operator: MobileOperator; phone: string }) {
+export async function requestCall(viewer: User, input: { calleeId: string; type: 'AUDIO' | 'VIDEO' }) {
   const callee = await loadCallee(viewer, input.calleeId);
   if (!callProvider.configured()) throw new AppError(503, 'CALLS_NOT_CONFIGURED', "Les appels ne sont pas encore configurés sur ce serveur");
-  if (!payments.operators(viewer.country).includes(input.operator)) {
-    if (payments.operators(viewer.country).length === 0) throw new AppError(503, 'PAYMENTS_NOT_CONFIGURED', 'Les paiements ne sont pas encore configurés sur ce serveur');
-    throw badRequest('OPERATOR_UNAVAILABLE', "Cet opérateur n'est pas disponible", { operator: 'Opérateur indisponible' });
-  }
   const e = await eligibility(viewer, callee, input.type);
   if (!e.allowed) throw forbidden(e.code, e.message);
-  const s = settingsDto(e.settings);
-  assertMobileMoneyCurrency(s.currency);
-  const unitPrice = (input.type === 'AUDIO' ? s.audioPrice : s.videoPrice)!;
-  const requestedMinutes = s.pricingMode === 'PER_MINUTE' ? input.minutes ?? Math.min(5, s.maxDurationMinutes) : s.maxDurationMinutes;
-  if (requestedMinutes > s.maxDurationMinutes) throw badRequest('INVALID_MINUTES', `Durée maximale : ${s.maxDurationMinutes} minutes`, { minutes: `${s.maxDurationMinutes} minutes maximum` });
-  const grossAmount = prepaidAmount(s.pricingMode, unitPrice, requestedMinutes);
-  if (grossAmount > limitIn(env.CALL_MAX_TOTAL_FCFA, s.currency)) throw badRequest('AMOUNT_TOO_HIGH', `Montant maximal d'un appel : ${formatAmountText(limitIn(env.CALL_MAX_TOTAL_FCFA, s.currency), s.currency)}`, { minutes: 'Réduisez la durée' });
-
-  const reference = newReference();
+  const rate = await creatorRate(callee.id, input.type);
+  if (!isUserOnline(callee.id)) throw conflict('CREATOR_OFFLINE', 'Ce créateur est hors ligne. Réessayez quand il sera en ligne.');
+  const account = await prisma.callMinuteAccount.findUnique({ where: { userId_creatorId_kind: { userId: viewer.id, creatorId: callee.id, kind: input.type } } });
+  const available = account?.balanceSeconds ?? 0;
+  if (available < Math.max(1, env.CALL_MIN_BILLABLE_SECONDS)) {
+    throw new AppError(402, 'NO_MINUTES', "Vous n'avez pas de minutes pour cet appel. Achetez des minutes chez ce créateur.", { creatorId: callee.id, kind: input.type });
+  }
+  const now = new Date();
   const created = await prisma.$transaction(async (tx) => {
-    await lockUser(tx, viewer.id); // un double clic ne crée pas deux demandes
-    if (await tx.call.findFirst({ where: { callerId: viewer.id, paymentStatus: 'REVIEW' }, select: { id: true } })) throw conflict('PAYMENT_UNDER_REVIEW', 'Un de vos paiements est en cours de vérification : ne le renouvelez pas, vous serez notifié');
+    await lockUser(tx, viewer.id); // un double clic ne crée pas deux appels
     const mine = await tx.call.findFirst({ where: { OR: [{ callerId: viewer.id, status: { in: [...IN_PROGRESS] } }, { calleeId: viewer.id, status: { in: [...LIVE] } }] }, select: { id: true } });
     if (mine) throw conflict('CALL_IN_PROGRESS', 'Vous avez déjà un appel en cours', { callId: mine.id });
     if (await creatorBusy(tx, callee.id)) throw conflict('CREATOR_BUSY', 'Ce créateur est en ligne avec quelqu’un d’autre, réessayez dans un instant');
     return tx.call.create({
-      data: { callerId: viewer.id, calleeId: callee.id, type: input.type, pricingMode: s.pricingMode, currency: s.currency, unitPrice, requestedMinutes, grossAmount, commissionBps: env.CALL_COMMISSION_BPS, reference, operator: input.operator, payerPhoneHint: input.phone.slice(-4) },
+      data: {
+        callerId: viewer.id, calleeId: callee.id, type: input.type, pricingMode: 'PER_MINUTE', currency: rate.currency,
+        unitPrice: rate.rate, requestedMinutes: Math.max(1, Math.ceil(available / 60)), grossAmount: 0,
+        commissionBps: env.CALL_COMMISSION_BPS, status: 'RINGING', paymentStatus: 'PAID', paidAt: now,
+        ringExpiresAt: new Date(now.getTime() + env.CALL_RING_SECONDS * 1000),
+      },
     });
-  }, { maxWait: 10_000, timeout: 20_000 }); // transaction courte, mais sur un disque lent (antivirus, point de contrôle) elle peut dépasser le délai par défaut de 5 s
-
-  const fail = () => prisma.call.updateMany({ where: { id: created.id, paymentStatus: 'PENDING' }, data: { paymentStatus: 'FAILED', status: 'PAYMENT_FAILED' } });
-  let res;
-  try {
-    res = await payments.initiate({ reference, amount: grossAmount, currency: s.currency, operator: input.operator, phone: input.phone, description: 'Appel Face to Face' });
-  } catch (err) { // rien n'est parti chez le prestataire : échec définitif, nouvelle demande possible
-    await fail();
-    throw err;
-  }
-  if (res.status === 'REJECTED') {
-    await fail();
-    throw new AppError(402, 'PAYMENT_FAILED', res.message || 'Le paiement a été refusé', { code: res.code });
-  }
-  // ACCEPTED, ou UNCERTAIN (demande peut-être arrivée : le paiement reste PENDING, résolu par le webhook ou le rapprochement — jamais rejoué).
-  if (res.status === 'ACCEPTED' && res.providerRef) await prisma.call.updateMany({ where: { id: created.id, paymentStatus: 'PENDING' }, data: { externalRef: res.providerRef } });
-  const now = await prisma.call.findUniqueOrThrow({ where: { id: created.id } }); // le webhook a pu arriver avant cette ligne
-  return { httpStatus: now.paymentStatus === 'PAID' ? (200 as const) : (202 as const), call: await view(viewer, now) };
+  }, { maxWait: 10_000, timeout: 20_000 });
+  return { httpStatus: 201 as const, call: await view(viewer, created) };
 }
 
 // ── Lecture ─────────────────────────────────────────────────────
@@ -279,7 +304,7 @@ export async function listCalls(viewer: User, o: { cursor?: string; limit: numbe
   const t = c ? new Date(c.t as number) : null;
   const where: Prisma.CallWhereInput = {
     AND: [
-      { OR: [{ callerId: viewer.id }, { calleeId: viewer.id, paymentStatus: 'PAID' }] },
+      { OR: [{ callerId: viewer.id, callerHiddenAt: null }, { calleeId: viewer.id, paymentStatus: 'PAID', calleeHiddenAt: null }] },
       ...(t ? [{ OR: [{ createdAt: { lt: t } }, { createdAt: t, id: { lt: String(c!.i) } }] }] : []),
     ],
   };
@@ -303,12 +328,14 @@ export async function acceptCall(viewer: User, id: string) {
   if (await isBlocked(viewer.id, c.callerId)) throw notFound('Appel introuvable');
   if (c.status !== 'RINGING') throw notPossible('CALL_NOT_RINGING', "Cet appel n'est plus en attente");
   const now = new Date();
+  const endMs = c.reference ? c.requestedMinutes * 60_000 : (await accountCapSeconds(c)) * 1000;
+  if (!c.reference && endMs < Math.max(1, env.CALL_MIN_BILLABLE_SECONDS) * 1000) throw notPossible('NO_MINUTES', "Le compte de minutes de l'appelant ne suffit plus pour cet appel");
   const outcome = await prisma.$transaction(async (tx) => {
     await lockUser(tx, viewer.id);
     if (await creatorBusy(tx, viewer.id, c.id)) return 'busy' as const;
     const r = await tx.call.updateMany({
       where: { id: c.id, status: 'RINGING', ringExpiresAt: { gt: now } },
-      data: { status: 'ACTIVE', answeredAt: now, endsAt: new Date(now.getTime() + c.requestedMinutes * 60_000), ringExpiresAt: null },
+      data: { status: 'ACTIVE', answeredAt: now, endsAt: new Date(now.getTime() + endMs), ringExpiresAt: null },
     });
     return r.count === 1 ? ('ok' as const) : ('gone' as const);
   });

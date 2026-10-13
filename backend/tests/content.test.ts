@@ -228,7 +228,7 @@ describe('visibilité et accès', () => {
     expect((await get(priv.id, other.auth)).status).toBe(404);
     expect((await get(unlisted.id, other.auth)).status).toBe(200);
     expect((await get(pub.id, other.auth)).status).toBe(200);
-    expect((await get(pub.id, other.auth)).body.video.viewer).toEqual({ liked: false, followsAuthor: false, isOwner: false });
+    expect((await get(pub.id, other.auth)).body.video.viewer).toMatchObject({ liked: false, followsAuthor: false, isOwner: false, disliked: false, saved: false, notifyOn: false });
   });
 
   it('l’auteur qui vous a bloqué devient invisible ; l’auteur suspendu aussi', async () => {

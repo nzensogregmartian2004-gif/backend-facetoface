@@ -1,17 +1,10 @@
 import { currencySchema } from '../../utils/currency';
 import { z } from 'zod';
 
-const operator = z.enum(['AIRTEL_MONEY', 'MOOV_MONEY'], { message: 'Choisissez un opérateur' });
-const phone = z.string().trim().regex(/^\+?[0-9 ]{8,16}$/, 'Numéro invalide').transform((v) => v.replace(/\D/g, '')).refine((v) => v.length >= 8 && v.length <= 15, 'Numéro invalide');
-
-/** Demande d'appel : le montant est calculé par le serveur d'après les réglages du créateur (le client n'envoie jamais de prix). */
+/** Demande d'appel : aucun paiement. Le client doit avoir des minutes de ce type chez ce créateur (débit à la fin de l'appel). */
 export const requestCallSchema = z.object({
   calleeId: z.string().min(1).max(64),
   type: z.enum(['AUDIO', 'VIDEO'], { message: "Type d'appel invalide" }),
-  /** Minutes à prépayer (tarif par minute). Ignoré pour un tarif par session. */
-  minutes: z.number().int('Nombre entier de minutes').min(1, 'Durée invalide').max(1000, 'Durée invalide').optional(),
-  operator,
-  phone,
 }).strict();
 
 export const callSettingsSchema = z.object({

@@ -17,7 +17,10 @@ export const PUBLIC_AUTHOR_SELECT = {
 const thumbUrl = (key: string | null) => (key ? objectStorage.readUrl(key) || null : null);
 
 /** Représentation d'un contenu. L'auteur passe par `serializePublic` (seul point de sortie d'un utilisateur). */
-export function serializeContent(kind: Kind, row: ContentWithPublicAuthor, viewer: User, flags: { liked: boolean; followsAuthor: boolean; purchased: boolean }) {
+/** Ce que le spectateur a déjà fait sur ce contenu et avec son auteur. Les champs optionnels valent false par défaut. */
+export type ViewerFlags = { liked: boolean; followsAuthor: boolean; purchased: boolean; disliked?: boolean; saved?: boolean; notifyOn?: boolean };
+
+export function serializeContent(kind: Kind, row: ContentWithPublicAuthor, viewer: User, flags: ViewerFlags) {
   const isOwner = row.authorId === viewer.id;
   return {
     id: row.id,
@@ -41,7 +44,7 @@ export function serializeContent(kind: Kind, row: ContentWithPublicAuthor, viewe
     publishedAt: row.publishedAt,
     createdAt: row.createdAt,
     author: serializePublic(row.author),
-    viewer: { liked: flags.liked, followsAuthor: flags.followsAuthor, isOwner },
+    viewer: { liked: flags.liked, disliked: flags.disliked ?? false, saved: flags.saved ?? false, followsAuthor: flags.followsAuthor, notifyOn: flags.notifyOn ?? false, isOwner },
   };
 }
 export type ContentDto = ReturnType<typeof serializeContent>;
@@ -51,15 +54,20 @@ export async function serializeMany(kind: Kind, rows: ContentWithPublicAuthor[],
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
   const authorIds = [...new Set(rows.map((r) => r.authorId))];
-  const [likes, follows, purchases] = await Promise.all([
+  const [likes, dislikes, saves, follows, purchases] = await Promise.all([
     prisma.like.findMany({ where: { userId: viewer.id, targetType: kind, targetId: { in: ids } }, select: { targetId: true } }),
-    prisma.follow.findMany({ where: { followerId: viewer.id, followingId: { in: authorIds } }, select: { followingId: true } }),
+    prisma.dislike.findMany({ where: { userId: viewer.id, targetType: kind, targetId: { in: ids } }, select: { targetId: true } }),
+    prisma.savedContent.findMany({ where: { userId: viewer.id, targetType: kind, targetId: { in: ids } }, select: { targetId: true } }),
+    prisma.follow.findMany({ where: { followerId: viewer.id, followingId: { in: authorIds } }, select: { followingId: true, notifyOn: true } }),
     prisma.paidContentPurchase.findMany({ where: { buyerId: viewer.id, contentType: kind, contentId: { in: ids }, status: 'PAID' }, select: { contentId: true } }),
   ]);
   const liked = new Set(likes.map((l) => l.targetId));
   const followed = new Set(follows.map((f) => f.followingId));
+  const disliked = new Set(dislikes.map((d) => d.targetId));
+  const saved = new Set(saves.map((s) => s.targetId));
+  const notified = new Set(follows.filter((f) => f.notifyOn).map((f) => f.followingId));
   const purchased = new Set(purchases.map((p) => p.contentId));
-  return rows.map((r) => serializeContent(kind, r, viewer, { liked: liked.has(r.id), followsAuthor: followed.has(r.authorId), purchased: purchased.has(r.id) }));
+  return rows.map((r) => serializeContent(kind, r, viewer, { liked: liked.has(r.id), disliked: disliked.has(r.id), saved: saved.has(r.id), followsAuthor: followed.has(r.authorId), notifyOn: notified.has(r.authorId), purchased: purchased.has(r.id) }));
 }
 
 export const serializeOne = async (kind: Kind, row: ContentWithPublicAuthor, viewer: User) => (await serializeMany(kind, [row], viewer))[0];

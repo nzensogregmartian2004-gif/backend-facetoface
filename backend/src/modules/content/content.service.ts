@@ -2,6 +2,7 @@ import { playbackPlan } from './playback.policy';
 import { blockedIdsFor } from './access';
 import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
+import { notifyMany } from '../notifications/notifications.service';
 import { env } from '../../config/env';
 import { randomToken } from '../../utils/crypto';
 import { badRequest, conflict, forbidden, notFound } from '../../utils/errors';
@@ -191,6 +192,11 @@ export async function publish(user: User, kind: Kind, id: string) {
   if (row.processingStatus !== 'READY') throw conflict('VIDEO_PROCESSING', row.processingStatus === 'FAILED' ? 'Le traitement vidéo a échoué' : 'La vidéo est encore en cours de traitement');
   const updated = await repo(prisma, kind).update({ where: { id }, data: { status: 'PUBLISHED', publishedAt: new Date() }, include: { author: true } });
   await tagsSafely(kind, id, 'sync');
+  // Cloche : les abonnés qui ont activé la cloche sont prévenus de la publication (contenu non privé).
+  if (updated.visibility !== 'PRIVATE') {
+    const bell = await prisma.follow.findMany({ where: { followingId: user.id, notifyOn: true }, select: { followerId: true } });
+    if (bell.length) await notifyMany(prisma, bell.map((f) => f.followerId), { type: 'NEW_CONTENT', actorId: user.id, targetType: kind, targetId: id, pushPayload: { type: 'NEW_CONTENT', contentKind: kind, contentId: id, username: user.username } });
+  }
   return serializeOne(kind, updated, user);
 }
 

@@ -62,6 +62,10 @@ export function serializeMessage(m: Message, viewer: User, purchased: boolean, p
     mine,
     kind: locked || sealed ? null : m.kind,
     text: hide ? null : m.text,
+    // Aperçu flouté uniquement quand le média est verrouillé (payant, non acheté).
+    preview: locked && m.previewKey ? { url: objectStorage.privateReadUrl(m.previewKey) || null } : null,
+    location: hide || m.latitude == null || m.longitude == null ? null : { latitude: m.latitude, longitude: m.longitude, label: m.placeLabel ?? null },
+    event: hide || !m.eventTitle ? null : { title: m.eventTitle, startsAt: m.eventStartsAt, place: m.eventPlace ?? null },
     media: hide || !m.mediaKey ? null : {
       // URL TOUJOURS signée et de courte durée (jamais le CDN public) : une URL permanente contournerait le paiement et exposerait les conversations privées.
       url: objectStorage.privateReadUrl(m.mediaKey) || null,
@@ -86,8 +90,24 @@ export function serializeMessage(m: Message, viewer: User, purchased: boolean, p
 }
 export type MessageDto = ReturnType<typeof serializeMessage>;
 
-/** Sérialise une page de messages avec un nombre fixe de requêtes (achats, réactions, destinataires de vue unique). */
+/** Sondage tel qu'il est montré à un membre : options, nombre de votes, mes choix. */
+type PollRow = { id: string; messageId: string; question: string; allowMultiple: boolean; closedAt: Date | null; options: { id: string; text: string; votes: { userId: string }[] }[] };
+export function pollDto(p: PollRow | undefined, viewer: User) {
+  if (!p) return null;
+  const voters = new Set(p.options.flatMap((o) => o.votes.map((v) => v.userId)));
+  return {
+    id: p.id, question: p.question, allowMultiple: p.allowMultiple, closed: !!p.closedAt, voters: voters.size,
+    options: p.options.map((o) => ({ id: o.id, text: o.text, count: o.votes.length, mine: o.votes.some((v) => v.userId === viewer.id) })),
+  };
+}
+
+/** Sérialise une page de messages avec un nombre fixe de requêtes (achats, réactions, destinataires de vue unique, sondages). */
 export async function serializeMessages(rows: Message[], viewer: User): Promise<MessageDto[]> {
+  const pollRows = rows.filter((r) => r.kind === 'POLL').map((r) => r.id);
+  const polls: PollRow[] = pollRows.length
+    ? await prisma.poll.findMany({ where: { messageId: { in: pollRows } }, include: { options: { orderBy: { position: 'asc' }, include: { votes: { select: { userId: true } } } } } })
+    : [];
+  const pollBy = new Map(polls.map((p) => [p.messageId, p]));
   const priced = rows.filter((r) => r.price != null).map((r) => r.id);
   const purchases = priced.length
     ? await prisma.messagePurchase.findMany({
@@ -134,6 +154,7 @@ export async function serializeMessages(rows: Message[], viewer: User): Promise<
     ...serializeMessage(r, viewer, bought.has(r.id), pending.get(r.id) ?? null, openingsBy.get(r.id) ?? []),
     reactions: byMessage.get(r.id) ?? [],
     starred: starredIds.has(r.id),
+    poll: pollDto(pollBy.get(r.id), viewer),
     status: r.senderId === viewer.id && !r.deletedAt ? receiptStatus(r.createdAt, receiptsBy.get(r.conversationId) ?? []) : null,
   }));
 }
@@ -147,6 +168,9 @@ export function previewOf(m: Message | null, viewer: User, purchased: boolean): 
   else if (m.viewOnce) text = '👁 Message à vue unique';
   else if (m.price != null && !mine && !purchased) text = '🔒 Message payant';
   else if (m.price != null && mine) text = m.mediaKey ? `💰 ${m.text?.trim() || 'Média'}` : `💰 ${m.text ?? ''}`;
+  else if (m.kind === 'POLL') text = '📊 Sondage';
+  else if (m.kind === 'EVENT') text = '📅 Événement';
+  else if (m.kind === 'LOCATION') text = '📍 Localisation';
   else if (m.mediaKey && !m.text) text = mediaTypeOf(m.mediaMime) === 'IMAGE' ? '📷 Photo' : mediaTypeOf(m.mediaMime) === 'AUDIO' ? '🎤 Vocal' : '🎬 Vidéo';
   else text = m.text ?? '';
   return { text: text.length > 120 ? `${text.slice(0, 117)}…` : text, mine, at: m.createdAt };

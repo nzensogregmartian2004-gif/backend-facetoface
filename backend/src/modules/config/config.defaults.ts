@@ -44,6 +44,7 @@ export const CONFIG_DEFAULTS: ConfigDefault[] = [
   { key: 'VIDEOS.MIN_WATCH_PERCENT', value: 30, type: 'DECIMAL', category: 'VIDEOS', description: 'Pourcentage minimum regardé pour une vue qualifiée.' },
   { key: 'VIDEOS.MIN_QUALIFIED_VIEWS', value: 1000, type: 'INTEGER', category: 'VIDEOS', description: 'Seuil indicatif de vues qualifiées.' },
   { key: 'LIVES.MIN_DURATION_MINUTES', value: 30, type: 'INTEGER', category: 'LIVES', description: 'Durée minimale d’un Live éligible.' },
+  { key: 'LIVES.CREATE_MIN_FOLLOWERS', value: 25, type: 'INTEGER', category: 'LIVES', description: 'Nombre minimum d’abonnés pour lancer un Live.' },
   { key: 'LIVES.MIN_DURATION_SECONDS', value: 30 * 60, type: 'INTEGER', category: 'LIVES', description: 'Durée minimale d’un Live éligible, en secondes.' },
   { key: 'LIVES.MIN_VIEWERS', value: 10, type: 'INTEGER', category: 'LIVES', description: 'Nombre minimum de spectateurs.' },
   { key: 'LIVES.MIN_UNIQUE_VIEWERS', value: 10, type: 'INTEGER', category: 'LIVES', description: 'Nombre minimum de spectateurs uniques.' },

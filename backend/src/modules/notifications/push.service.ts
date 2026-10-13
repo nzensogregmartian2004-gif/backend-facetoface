@@ -7,6 +7,8 @@ export type PushPayload = {
   liveId?: string;
   username?: string;
   callId?: string;
+  contentKind?: string;
+  contentId?: string;
 };
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
@@ -17,6 +19,7 @@ function titleFor(type: string) {
     case 'LIVE_STARTED': return 'Face to Face — Live';
     case 'NEW_MESSAGE': return 'Face to Face — Nouveau message';
     case 'FOLLOW': return 'Face to Face — Nouveau follower';
+    case 'NEW_CONTENT': return 'Face to Face — Nouvelle publication';
     default: return 'Face to Face';
   }
 }
@@ -28,6 +31,7 @@ function bodyFor(type: string, actorName?: string) {
     case 'LIVE_STARTED': return `${actor}est en direct.`;
     case 'NEW_MESSAGE': return `${actor}vous a envoyé un message.`;
     case 'FOLLOW': return `${actor}vous suit maintenant.`;
+    case 'NEW_CONTENT': return `${actor}a publié une nouvelle vidéo.`;
     case 'MESSAGE_PURCHASED': return `${actor}a acheté votre message payant.`;
     case 'GIFT_RECEIVED': return `${actor}vous a envoyé un cadeau.`;
     case 'TIP_RECEIVED': return `${actor}vous a envoyé un tip.`;

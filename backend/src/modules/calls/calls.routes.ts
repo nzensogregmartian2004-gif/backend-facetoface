@@ -1,3 +1,5 @@
+import * as personal from './callsPersonal.service';
+import * as schedule from './schedule.service';
 import { Router } from 'express';
 import { authed, requireAuth } from '../../middleware/auth';
 import { unlockLimiter } from '../../middleware/rateLimit';
@@ -24,6 +26,15 @@ callsRouter.post('/', unlockLimiter, wrap(async (req, res) => {
   const { httpStatus, ...payload } = await svc.requestCall(me(req), body(requestCallSchema, req));
   res.status(httpStatus).json(payload);
 }));
+callsRouter.get('/favorites', wrap(async (req, res) => { res.json({ favorites: await personal.listFavorites(me(req)) }); }));
+callsRouter.post('/favorites', wrap(async (req, res) => { const b = body(personal.favoriteSchema, req); res.json(await personal.setFavorite(me(req), b.userId, b.favorite)); }));
+callsRouter.delete('/favorites/:userId', wrap(async (req, res) => { res.json(await personal.setFavorite(me(req), String(req.params.userId), false)); }));
+callsRouter.delete('/history', wrap(async (req, res) => { res.json(await personal.clearCallHistory(me(req))); }));
+callsRouter.get('/scheduled', wrap(async (req, res) => { res.json({ items: await schedule.listSchedules(me(req)) }); }));
+callsRouter.post('/scheduled', wrap(async (req, res) => { res.status(201).json({ item: await schedule.createSchedule(me(req), body(schedule.scheduleSchema, req)) }); }));
+callsRouter.post('/scheduled/:id/accept', wrap(async (req, res) => { res.json(await schedule.respondSchedule(me(req), String(req.params.id), true)); }));
+callsRouter.post('/scheduled/:id/decline', wrap(async (req, res) => { res.json(await schedule.respondSchedule(me(req), String(req.params.id), false)); }));
+callsRouter.post('/scheduled/:id/cancel', wrap(async (req, res) => { res.json(await schedule.cancelSchedule(me(req), String(req.params.id))); }));
 callsRouter.get('/:id', wrap(async (req, res) => { res.json(await svc.getCall(me(req), id(req))); }));
 callsRouter.post('/:id/accept', wrap(async (req, res) => { res.json(await svc.acceptCall(me(req), id(req))); }));
 callsRouter.post('/:id/decline', wrap(async (req, res) => { res.json(await svc.declineCall(me(req), id(req))); }));

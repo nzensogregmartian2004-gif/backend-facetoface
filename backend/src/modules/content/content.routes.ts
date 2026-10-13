@@ -77,6 +77,10 @@ export function createContentRouter(kind: Kind) {
 
   r.post('/:id/like', wrap(async (req, res) => { res.json(await inter.like(authed(req).user, kind, id(req))); }));
   r.delete('/:id/like', wrap(async (req, res) => { res.json(await inter.unlike(authed(req).user, kind, id(req))); }));
+  r.post('/:id/dislike', wrap(async (req, res) => { res.json(await inter.dislike(authed(req).user, kind, id(req))); }));
+  r.delete('/:id/dislike', wrap(async (req, res) => { res.json(await inter.undislike(authed(req).user, kind, id(req))); }));
+  r.post('/:id/save', wrap(async (req, res) => { res.json(await inter.save(authed(req).user, kind, id(req))); }));
+  r.delete('/:id/save', wrap(async (req, res) => { res.json(await inter.unsave(authed(req).user, kind, id(req))); }));
   r.post('/:id/view', wrap(async (req, res) => { const b = body(viewSchema, req); res.json(await inter.recordView(authed(req).user, kind, id(req), b.watchedSeconds, { ip: req.ip, userAgent: req.get('user-agent') ?? undefined })); }));
   r.post('/:id/share', shareLimiter, wrap(async (req, res) => { res.json(await inter.share(authed(req).user, kind, id(req))); }));
 

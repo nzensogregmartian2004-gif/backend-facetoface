@@ -6,6 +6,8 @@ export const groupUpdateSchema = z.object({
   description: z.string().trim().max(500).nullable().optional(),
   allowPaidContent: z.boolean().optional(),
   entryPrice: z.number().int('Prix entier (FCFA)').nullable().optional(),
+  /** Seuls les administrateurs peuvent publier dans le groupe. */
+  adminsOnlyPosting: z.boolean().optional(),
 }).strict();
 
 /** Passation de la propriété : destinataire et confirmation explicite obligatoire (le propriétaire doit le dire). */

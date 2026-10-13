@@ -3,6 +3,7 @@ import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { notifyMany } from '../notifications/notifications.service';
 import { conflict, forbidden, notFound } from '../../utils/errors';
+import { getConfigValue } from '../config/config.service';
 import { hasActiveSubscription } from '../subscriptions/subscriptions.service';
 import { closeRoom, publishToRoom, setRoomAuthorizer } from '../../realtime/realtime';
 import { assertNotBlocked } from './live.participants';
@@ -61,6 +62,7 @@ export async function createLive(user: User, input: {
   title: string; description?: string; thumbnailKey?: string; visibility: 'PUBLIC'|'UNLISTED'; access: 'EVERYONE'|'SUBSCRIBERS'; scheduledAt?: Date;
 }) {
   ensureCreator(user);
+  await assertCanStartLive(user);
   if (input.scheduledAt && input.scheduledAt <= new Date()) throw new Error('SCHEDULED_AT_MUST_BE_FUTURE');
   const live = await prisma.live.create({
     data: {
@@ -266,4 +268,17 @@ export async function myLives(user: User, limit = 30) {
       };
     }),
   };
+}
+
+/** Éligibilité au direct : nombre d'abonnés, seuil (paramètre d'administration LIVES.CREATE_MIN_FOLLOWERS). */
+export async function liveEligibility(user: User) {
+  const minFollowers = (await getConfigValue<number>('LIVES.CREATE_MIN_FOLLOWERS', 25)) ?? 25;
+  const followers = await prisma.follow.count({ where: { followingId: user.id } });
+  return { followers, minFollowers, canStart: followers >= minFollowers };
+}
+
+/** Contrôle serveur : même règle que l'écran, appliquée au lancement (le client ne peut pas la contourner). */
+async function assertCanStartLive(user: User) {
+  const e = await liveEligibility(user);
+  if (!e.canStart) throw forbidden('LIVE_LOCKED', `Il faut ${e.minFollowers} abonnés pour lancer un direct (vous en avez ${e.followers}).`);
 }

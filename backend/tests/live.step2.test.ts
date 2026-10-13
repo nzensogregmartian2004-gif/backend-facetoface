@@ -72,3 +72,13 @@ describe('cadeaux en direct : GIFT_SENT', () => {
     expect(payload.payload.sender.id).toBe(sender.user.id);
   });
 });
+
+// Seuil de création de Live (LIVES.CREATE_MIN_FOLLOWERS, 25 par défaut en production).
+// Ces tests ne vérifient pas le seuil : on le ramène à 0 après la réinitialisation de la base.
+beforeEach(async () => {
+  await prisma.appConfig.upsert({
+    where: { key: 'LIVES.CREATE_MIN_FOLLOWERS' },
+    update: { value: 0 },
+    create: { key: 'LIVES.CREATE_MIN_FOLLOWERS', value: 0, type: 'INTEGER', description: 'Nombre minimum d’abonnés pour lancer un Live.', defaultValue: 25, category: 'LIVES' },
+  });
+});
