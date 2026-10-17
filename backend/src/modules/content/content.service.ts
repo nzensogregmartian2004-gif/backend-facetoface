@@ -1,9 +1,11 @@
+import { assertNotRestricted } from '../../utils/restriction';
 import { playbackPlan } from './playback.policy';
 import { blockedIdsFor } from './access';
 import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { notifyMany } from '../notifications/notifications.service';
 import { env } from '../../config/env';
+import { refreshDownloadsSetting } from './downloads.setting';
 import { randomToken } from '../../utils/crypto';
 import { badRequest, conflict, forbidden, notFound } from '../../utils/errors';
 import { idCursor, readIdCursor } from '../../utils/cursor';
@@ -185,6 +187,7 @@ export async function completeUpload(user: User, kind: Kind, id: string, b: { du
 }
 
 export async function publish(user: User, kind: Kind, id: string) {
+  assertNotRestricted(user);
   const row = await loadOwned(user, kind, id);
   if (row.status === 'HIDDEN') throw forbidden('CONTENT_HIDDEN', 'Ce contenu a été masqué par la modération');
   if (row.status === 'PUBLISHED') return serializeOne(kind, row, user);
@@ -249,7 +252,8 @@ export async function similar(user: User, kind: Kind, id: string, limit = 12) {
 
 /** Téléchargement contrôlé : interdit par défaut, autorisé contenu par contenu par le créateur, désactivable globalement. */
 export async function downloadUrl(user: User, kind: Kind, id: string) {
-  if (!env.DOWNLOADS_ENABLED) throw forbidden('DOWNLOADS_DISABLED', 'Les téléchargements sont désactivés');
+  const downloadsEnabled = await refreshDownloadsSetting();
+  if (!downloadsEnabled) throw forbidden('DOWNLOADS_DISABLED', 'Les téléchargements sont désactivés');
   const row = await loadVisible(user, kind, id);
   if (!row.allowDownload) throw forbidden('DOWNLOAD_NOT_ALLOWED', "Le créateur n'autorise pas le téléchargement de ce contenu");
   if (!row.videoKey || !row.uploadedAt) throw conflict('NOT_READY', "La vidéo n'est pas encore disponible");

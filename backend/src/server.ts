@@ -9,6 +9,7 @@ import { startViewOnceSweeper } from './modules/messages/viewOnce.sweeper';
 import { startDisappearingSweeper } from './modules/messages/disappearing.sweeper';
 import { initPresence } from './modules/messages/presence';
 import { startStorySweeper } from './modules/stories/stories.service';
+import { startDownloadsSettingRefresh } from './modules/content/downloads.setting';
 
 const server = createServer(createApp());
 attachRealtime(server);
@@ -23,6 +24,7 @@ startViewOnceSweeper(); // purge des médias des messages à vue unique déjà o
 startDisappearingSweeper(); // suppression du contenu des messages éphémères arrivés à échéance
 initPresence(); // présence en ligne et saisie, branchées sur le temps réel
 startStorySweeper(); // suppression des stories arrivées à échéance (fichier compris)
+startDownloadsSettingRefresh(); // réglage administrateur des téléchargements, relu toutes les 30 s
 
 // Arrêt propre (déploiement, redémarrage) : on cesse d'accepter, on laisse finir les requêtes en cours
 // (notamment les écritures financières), puis on ferme la base. Plafond de 25 s avant arrêt forcé.

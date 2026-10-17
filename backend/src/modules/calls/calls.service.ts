@@ -1,3 +1,5 @@
+import { assertNotRestricted } from '../../utils/restriction';
+import { getConfigValue } from '../config/config.service';
 import { DEFAULT_CURRENCY, formatAmountText, limitIn, SUPPORTED_CURRENCIES } from '../../utils/currency';
 import type { Call, CreatorCallSettings, Prisma, User } from '@prisma/client';
 import { prisma } from '../../config/db';
@@ -21,7 +23,7 @@ const IN_PROGRESS = ['AWAITING_PAYMENT', 'RINGING', 'ACTIVE'] as const;
 const LIVE = ['RINGING', 'ACTIVE'] as const;
 
 /** Paramètres publics des appels (le mobile ne doit rien coder en dur). */
-export const settings = () => {
+export const settings = async () => {
   const operators = payments.operators();
   return {
     enabled: callProvider.configured() && operators.length > 0,
@@ -35,14 +37,14 @@ export const settings = () => {
     },
     ringSeconds: env.CALL_RING_SECONDS,
     minBillableSeconds: env.CALL_MIN_BILLABLE_SECONDS,
-    commissionBps: env.CALL_COMMISSION_BPS,
+    commissionBps: await getConfigValue<number>('CALLS.COMMISSION_BPS', env.CALL_COMMISSION_BPS),
     disputeDays: env.CALL_DISPUTE_DAYS,
   };
 };
 
 // ── Réglages du créateur ─────────────────────────────────────────
 const settingsDto = (s: CreatorCallSettings | null) => ({
-  pricingMode: s?.pricingMode ?? 'PER_MINUTE',
+  pricingMode: 'PER_MINUTE' as const, // la facturation est toujours à la minute (la session n'est plus proposée)
   currency: s?.currency ?? DEFAULT_CURRENCY,
   audioPrice: s?.audioPrice ?? null,
   videoPrice: s?.videoPrice ?? null,
@@ -60,7 +62,7 @@ export async function getMySettings(viewer: User) {
   return { settings: settingsDto(await prisma.creatorCallSettings.findUnique({ where: { userId: viewer.id } })) };
 }
 
-export async function updateMySettings(viewer: User, input: { pricingMode?: 'PER_MINUTE' | 'PER_SESSION'; currency?: string; audioPrice?: number | null; videoPrice?: number | null; maxDurationMinutes?: number; access?: 'EVERYONE' | 'FOLLOWERS' | 'SUBSCRIBERS'; isAvailable?: boolean }) {
+export async function updateMySettings(viewer: User, input: { pricingMode?: 'PER_MINUTE'; currency?: string; audioPrice?: number | null; videoPrice?: number | null; maxDurationMinutes?: number; access?: 'EVERYONE' | 'FOLLOWERS' | 'SUBSCRIBERS'; isAvailable?: boolean }) {
   requireCreator(viewer);
   const current = settingsDto(await prisma.creatorCallSettings.findUnique({ where: { userId: viewer.id } }));
   const currencyChanged = input.currency !== undefined && input.currency !== current.currency;
@@ -74,7 +76,7 @@ export async function updateMySettings(viewer: User, input: { pricingMode?: 'PER
   if (input.maxDurationMinutes !== undefined && input.maxDurationMinutes > env.CALL_MAX_DURATION_MINUTES) details.maxDurationMinutes = `${env.CALL_MAX_DURATION_MINUTES} minutes maximum`;
   if (Object.keys(details).length) throw badRequest('INVALID_CALL_SETTINGS', 'Réglages invalides', details);
   if (next.isAvailable && next.audioPrice == null && next.videoPrice == null) throw badRequest('NO_CALL_PRICE', 'Fixez un prix (audio ou vidéo) avant de vous rendre disponible', { isAvailable: 'Aucun prix défini' });
-  const data = { pricingMode: next.pricingMode, currency: next.currency, audioPrice: next.audioPrice, videoPrice: next.videoPrice, maxDurationMinutes: next.maxDurationMinutes, access: next.access, isAvailable: next.isAvailable };
+  const data = { pricingMode: 'PER_MINUTE' as const, currency: next.currency, audioPrice: next.audioPrice, videoPrice: next.videoPrice, maxDurationMinutes: next.maxDurationMinutes, access: next.access, isAvailable: next.isAvailable };
   const saved = await prisma.creatorCallSettings.upsert({ where: { userId: viewer.id }, create: { userId: viewer.id, ...data }, update: data });
   return { settings: settingsDto(saved) };
 }
@@ -115,7 +117,7 @@ const creatorBusy = async (db: Prisma.TransactionClient | typeof prisma, userId:
 export async function getOffer(viewer: User, calleeId: string) {
   const callee = await loadCallee(viewer, calleeId);
   const e = await eligibility(viewer, callee, null);
-  const s = settings();
+  const s = await settings();
   if (!e.allowed) return { offer: null, canCall: false, reason: { code: e.code, message: e.message } };
   const busy = await creatorBusy(prisma, callee.id);
   const d = settingsDto(e.settings);
@@ -253,6 +255,7 @@ export function startCallSweeper(): NodeJS.Timeout | null {
  * Rien n'est débité à la demande ni au décroché : le décompte se fait à la fin, à la seconde.
  */
 export async function requestCall(viewer: User, input: { calleeId: string; type: 'AUDIO' | 'VIDEO' }) {
+  assertNotRestricted(viewer);
   const callee = await loadCallee(viewer, input.calleeId);
   if (!callProvider.configured()) throw new AppError(503, 'CALLS_NOT_CONFIGURED', "Les appels ne sont pas encore configurés sur ce serveur");
   const e = await eligibility(viewer, callee, input.type);
@@ -265,6 +268,8 @@ export async function requestCall(viewer: User, input: { calleeId: string; type:
     throw new AppError(402, 'NO_MINUTES', "Vous n'avez pas de minutes pour cet appel. Achetez des minutes chez ce créateur.", { creatorId: callee.id, kind: input.type });
   }
   const now = new Date();
+  // Commission figée à la demande : un changement ultérieur de réglage ne modifie pas cet appel.
+  const commissionBps = (await getConfigValue<number>('CALLS.COMMISSION_BPS', env.CALL_COMMISSION_BPS)) ?? env.CALL_COMMISSION_BPS;
   const created = await prisma.$transaction(async (tx) => {
     await lockUser(tx, viewer.id); // un double clic ne crée pas deux appels
     const mine = await tx.call.findFirst({ where: { OR: [{ callerId: viewer.id, status: { in: [...IN_PROGRESS] } }, { calleeId: viewer.id, status: { in: [...LIVE] } }] }, select: { id: true } });
@@ -274,7 +279,7 @@ export async function requestCall(viewer: User, input: { calleeId: string; type:
       data: {
         callerId: viewer.id, calleeId: callee.id, type: input.type, pricingMode: 'PER_MINUTE', currency: rate.currency,
         unitPrice: rate.rate, requestedMinutes: Math.max(1, Math.ceil(available / 60)), grossAmount: 0,
-        commissionBps: env.CALL_COMMISSION_BPS, status: 'RINGING', paymentStatus: 'PAID', paidAt: now,
+        commissionBps, status: 'RINGING', paymentStatus: 'PAID', paidAt: now,
         ringExpiresAt: new Date(now.getTime() + env.CALL_RING_SECONDS * 1000),
       },
     });

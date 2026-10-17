@@ -1,3 +1,4 @@
+import { assertNotRestricted } from '../../utils/restriction';
 import type { User } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/db';
@@ -124,6 +125,7 @@ export async function listByAuthor(viewer: User, username: string, o: { cursor?:
 
 /** Publie un post : texte, sondage et image facultatifs. */
 export async function create(user: User, input: { text: string; poll?: string[]; visibility?: 'PUBLIC' | 'UNLISTED' | 'PRIVATE'; imageKey?: string }) {
+  assertNotRestricted(user);
   if (input.imageKey) await verifyImage(user, input.imageKey);
   const post = await prisma.post.create({
     data: {

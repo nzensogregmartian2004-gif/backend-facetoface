@@ -1,3 +1,4 @@
+import { assertNotRestricted } from '../../utils/restriction';
 import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { forbidden, notFound } from '../../utils/errors';
@@ -105,6 +106,7 @@ async function replyTarget(targetId: string, kind: Kind, id: string) {
 }
 
 export async function create(viewer: User, kind: Kind, id: string, input: { text?: string; audioKey?: string; durationMs?: number; replyToId?: string }) {
+  assertNotRestricted(viewer);
   const content = await loadInteractive(viewer, kind, id); // 404 si l'auteur vous a bloqué
   if (!content.allowComments) throw forbidden('COMMENTS_DISABLED', 'Les commentaires sont désactivés sur ce contenu');
   const audio = input.audioKey ? await verifyAudio(viewer, input.audioKey) : null;

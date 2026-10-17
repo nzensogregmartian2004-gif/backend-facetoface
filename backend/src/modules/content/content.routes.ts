@@ -10,6 +10,7 @@ import * as svc from './content.service';
 import { commentSchema, completeUploadSchema, createContentSchema, mineQuerySchema, multipartPartSchema, multipartStartSchema, pageQuerySchema, retentionQuerySchema, updateContentSchema, uploadUrlSchema, viewSchema, watchBatchSchema } from './content.schemas';
 import * as multipart from './multipart.service';
 import * as shortWatch from './shortWatch.service';
+import * as videoWatch from './videoWatch.service';
 import * as inter from './interactions.service';
 import * as paid from './paidContent.service';
 import type { Kind } from './types';
@@ -86,6 +87,12 @@ export function createContentRouter(kind: Kind) {
 
   r.get('/:id/comments', wrap(async (req, res) => { res.json(await comments.list(authed(req).user, kind, id(req), parse(pageQuerySchema, req.query))); }));
   r.post('/:id/comments', commentLimiter, wrap(async (req, res) => { res.status(201).json({ comment: await comments.create(authed(req).user, kind, id(req), body(commentSchema, req)) }); }));
+
+  if (kind === 'VIDEO') {
+    // Lot 2 : temps de visionnage des vidéos longues (lots, complétion) et statistiques du créateur.
+    r.post('/:id/watch', watchLimiter, wrap(async (req, res) => { res.json(await videoWatch.recordVideoWatchBatch(authed(req).user, id(req), body(watchBatchSchema, req).sessions)); }));
+    r.get('/stats/retention', wrap(async (req, res) => { res.json(await videoWatch.creatorVideoRetention(authed(req).user, parse(retentionQuerySchema, req.query).range)); }));
+  }
 
   if (kind === 'SHORT') {
     // Étape 11 : temps de visionnage envoyé par lots, et rétention du créateur (agrégée, sans identité).

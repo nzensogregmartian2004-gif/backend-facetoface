@@ -206,7 +206,8 @@ describe('recherche', () => {
     expect((await get(a, '/api/search?type=videos')).status).toBe(400); // ni mot-clé ni catégorie
     expect((await get(a, '/api/search?q=ab&sort=views')).status).toBe(400); // vues : contenus seulement
     expect((await get(a, '/api/search?q=ab&category=music')).status).toBe(400);
-    expect((await get(a, '/api/search?q=ab&type=lives')).status).toBe(400);
+    expect((await get(a, '/api/search?q=ab&type=lives')).status).toBe(200); // les Lives sont recherchables
+    expect((await get(a, '/api/search?q=ab&type=lives&category=music')).status).toBe(400); // pas de catégorie pour les Lives
   });
 
   it('trouve les créateurs par identifiant ou nom (insensible à la casse, « @ » toléré), jamais soi-même', async () => {

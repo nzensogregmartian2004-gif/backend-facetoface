@@ -1,3 +1,4 @@
+import { commissionBpsFor } from '../config/commission';
 import { randomBytes } from 'node:crypto';
 import type { Prisma, User } from '@prisma/client';
 import { prisma } from '../../config/db';
@@ -72,7 +73,7 @@ export async function pay(user: User, id: string, input: { operator: MobileOpera
     throw badRequest('OPERATOR_UNAVAILABLE', "Cet opérateur n'est pas disponible");
   }
   assertMobileMoneyCurrency(r.currency);
-  const split = splitRecord(r.price, env.CUSTOM_VIDEO_COMMISSION_BPS, r.currency);
+  const split = splitRecord(r.price, await commissionBpsFor('CUSTOM_VIDEO.COMMISSION_BPS', env.CUSTOM_VIDEO_COMMISSION_BPS), r.currency);
   const reference = newReference();
   const payment = await prisma.customVideoPayment.create({ data: { requestId: r.id, buyerId: user.id, creatorId: r.creatorId, ...split, reference, operator: input.operator, payerPhoneHint: input.phone.slice(-4) } });
   await prisma.customVideoRequest.update({ where: { id: r.id }, data: { status: 'PAYMENT_PENDING' } });

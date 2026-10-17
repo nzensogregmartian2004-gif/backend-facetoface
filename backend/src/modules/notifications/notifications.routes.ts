@@ -1,3 +1,4 @@
+import { PREF_CATEGORIES, prefsFrom, prefsPatchSchema } from './notifyPrefs';
 import { Router } from 'express';
 import { requireAuth, authed } from '../../middleware/auth';
 import { prisma } from '../../config/db';
@@ -47,3 +48,17 @@ notificationsRouter.post('/:id/read', wrap(async (req, res) => {
   res.status(204).end();
 }));
 notificationsRouter.post('/read-all', wrap(async (req, res) => { await prisma.notification.updateMany({where:{userId:authed(req).user.id,readAt:null},data:{readAt:new Date()}}); res.status(204).end(); }));
+
+notificationsRouter.get('/preferences', wrap(async (req, res) => {
+  const u = await prisma.user.findUnique({ where: { id: authed(req).user.id }, select: { notifyPrefs: true } });
+  res.json({ prefs: prefsFrom(u?.notifyPrefs), categories: PREF_CATEGORIES });
+}));
+notificationsRouter.put('/preferences', wrap(async (req, res) => {
+  const parsed = prefsPatchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ code: 'INVALID_PREFS', message: 'Réglages invalides' });
+  const userId = authed(req).user.id;
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { notifyPrefs: true } });
+  const next = { ...prefsFrom(u?.notifyPrefs), ...parsed.data };
+  await prisma.user.update({ where: { id: userId }, data: { notifyPrefs: next } });
+  res.json({ prefs: next });
+}));

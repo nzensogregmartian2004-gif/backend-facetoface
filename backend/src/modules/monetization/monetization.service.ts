@@ -1,3 +1,4 @@
+import { commissionBpsFor } from '../config/commission';
 import type { CreatorEarningSource, Prisma, User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { env } from '../../config/env';
@@ -8,7 +9,7 @@ import { SUPPORTED_CURRENCIES } from '../../utils/currency';
 import { creditCreatorWallet } from '../wallet/wallet.service';
 import { getCurrentRuleVersion } from '../config/config.service';
 
-const commissionBps = () => env.PAID_MESSAGE_COMMISSION_BPS ?? 2000;
+const commissionBps = () => commissionBpsFor('PAID_MESSAGE.COMMISSION_BPS', env.PAID_MESSAGE_COMMISSION_BPS ?? 2000);
 
 export type EarningRecordInput = {
   creatorId: string;
@@ -27,7 +28,7 @@ export async function recordCreatorEarning(db: Prisma.TransactionClient | typeof
   if (!creator) throw forbidden('CREATOR_NOT_FOUND', 'Créateur introuvable');
   if (creator.status !== 'ACTIVE' || creator.monetizationDisabledAt) throw forbidden('MONETIZATION_DISABLED', 'La monétisation de ce créateur est désactivée');
   const currency = normalizeCurrency(input.currency);
-  const split = splitAmount(input.grossAmount, input.commissionBps ?? commissionBps());
+  const split = splitAmount(input.grossAmount, input.commissionBps ?? await commissionBps());
   const ruleVersion = input.ruleVersion ?? await getCurrentRuleVersion(db);
   const status = input.status ?? 'AVAILABLE';
   const earning = await db.creatorEarning.upsert({

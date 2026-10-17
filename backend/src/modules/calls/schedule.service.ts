@@ -1,3 +1,4 @@
+import { notify } from '../notifications/notifications.service';
 import { z } from 'zod';
 import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
@@ -29,10 +30,12 @@ export async function createSchedule(viewer: User, b: z.infer<typeof scheduleSch
   if (!creator || creator.status !== 'ACTIVE' || !creator.isCreator) throw notFound('Créateur introuvable');
   const err = scheduleWindowError(b.startsAt, b.durationMinutes, new Date());
   if (err) throw badRequest('SCHEDULE_WINDOW', WINDOW_MESSAGES[err as keyof typeof WINDOW_MESSAGES] ?? 'Créneau invalide');
-  return prisma.scheduledCall.create({
+  const created = await prisma.scheduledCall.create({
     data: { callerId: viewer.id, creatorId: b.creatorId, type: b.type, startsAt: b.startsAt, durationMinutes: b.durationMinutes },
     select: { id: true, type: true, startsAt: true, durationMinutes: true, status: true },
   });
+  await notify(prisma, { userId: b.creatorId, type: 'CALL_SCHEDULE_REQUESTED', actorId: viewer.id, pushPayload: { type: 'CALL_SCHEDULE_REQUESTED' } });
+  return created;
 }
 
 /** Mes appels planifiés, comme client ou comme créateur, du plus proche au plus lointain. */
@@ -51,12 +54,14 @@ export async function listSchedules(viewer: User) {
 
 /** Le créateur accepte ou refuse une demande en attente, avant le créneau. */
 export async function respondSchedule(viewer: User, id: string, accept: boolean) {
-  const s = await prisma.scheduledCall.findUnique({ where: { id }, select: { id: true, creatorId: true, status: true, startsAt: true } });
+  const s = await prisma.scheduledCall.findUnique({ where: { id }, select: { id: true, callerId: true, creatorId: true, status: true, startsAt: true } });
   if (!s) throw notFound('Appel planifié introuvable');
   if (s.creatorId !== viewer.id) throw forbidden('NOT_CREATOR', 'Seul le créateur répond à une demande');
   if (s.status !== 'PENDING') throw conflict('SCHEDULE_NOT_PENDING', 'Cette demande n’est plus en attente');
   if (s.startsAt.getTime() <= Date.now()) throw badRequest('SCHEDULE_PAST', 'Ce créneau est déjà passé');
-  return prisma.scheduledCall.update({ where: { id }, data: { status: accept ? 'ACCEPTED' : 'DECLINED' }, select: { id: true, status: true } });
+  const updated = await prisma.scheduledCall.update({ where: { id }, data: { status: accept ? 'ACCEPTED' : 'DECLINED' }, select: { id: true, status: true } });
+  await notify(prisma, { userId: s.callerId, type: 'CALL_SCHEDULE_ANSWERED', actorId: viewer.id, pushPayload: { type: 'CALL_SCHEDULE_ANSWERED' } });
+  return updated;
 }
 
 /** Annulation par le client ou le créateur, tant que le créneau n'a pas commencé. */
@@ -66,5 +71,8 @@ export async function cancelSchedule(viewer: User, id: string) {
   if (s.callerId !== viewer.id && s.creatorId !== viewer.id) throw forbidden('NOT_PARTY', 'Vous ne participez pas à cet appel');
   if (s.status !== 'PENDING' && s.status !== 'ACCEPTED') throw conflict('SCHEDULE_CLOSED', 'Cet appel ne peut plus être annulé');
   if (s.startsAt.getTime() <= Date.now()) throw badRequest('SCHEDULE_PAST', 'Ce créneau a déjà commencé');
-  return prisma.scheduledCall.update({ where: { id }, data: { status: 'CANCELLED' }, select: { id: true, status: true } });
+  const updated = await prisma.scheduledCall.update({ where: { id }, data: { status: 'CANCELLED' }, select: { id: true, status: true } });
+  const other = s.callerId === viewer.id ? s.creatorId : s.callerId;
+  await notify(prisma, { userId: other, type: 'CALL_SCHEDULE_CANCELLED', actorId: viewer.id, pushPayload: { type: 'CALL_SCHEDULE_CANCELLED' } });
+  return updated;
 }

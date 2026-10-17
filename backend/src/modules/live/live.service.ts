@@ -1,3 +1,5 @@
+import { assertNotRestricted } from '../../utils/restriction';
+import { escapeLike } from '../../utils/like';
 import { randomBytes } from 'node:crypto';
 import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
@@ -61,6 +63,7 @@ function serialize(live: any) {
 export async function createLive(user: User, input: {
   title: string; description?: string; thumbnailKey?: string; visibility: 'PUBLIC'|'UNLISTED'; access: 'EVERYONE'|'SUBSCRIBERS'; scheduledAt?: Date;
 }) {
+  assertNotRestricted(user);
   ensureCreator(user);
   await assertCanStartLive(user);
   if (input.scheduledAt && input.scheduledAt <= new Date()) throw new Error('SCHEDULED_AT_MUST_BE_FUTURE');
@@ -93,6 +96,7 @@ export async function updateLive(user: User, liveId: string, input: {
 }
 
 export async function startLive(user: User, liveId: string) {
+  assertNotRestricted(user);
   const live = await getOwnedLive(user.id, liveId);
   if (!['SCHEDULED', 'LIVE'].includes(live.status)) throw new Error('LIVE_CANNOT_START');
   const updated = await prisma.live.update({
@@ -143,6 +147,38 @@ export async function listLives(status?: 'SCHEDULED'|'LIVE'|'ENDED', limit = 20)
     include: { host: true },
   });
   return rows.map(serialize);
+}
+
+/**
+ * Recherche de Lives publics, accès pour tous : en cours ou programmés, titre, description ou nom de l'hôte.
+ * Les Lives en cours passent avant les programmés, puis les plus suivis. Pagination par décalage.
+ * Les hôtes bloqués dans un sens ou dans l'autre (blockedIds) et les comptes inactifs sont exclus.
+ */
+export async function searchLives(text: string, offset: number, limit: number, blockedIds: string[]) {
+  const needle = text ? escapeLike(text) : '';
+  const rows = await prisma.live.findMany({
+    where: {
+      status: { in: ['SCHEDULED', 'LIVE'] },
+      moderationStatus: 'ACTIVE',
+      visibility: 'PUBLIC',
+      access: 'EVERYONE',
+      host: { status: 'ACTIVE', profileModerationStatus: 'ACTIVE' },
+      ...(blockedIds.length ? { hostId: { notIn: blockedIds } } : {}),
+      ...(needle ? { OR: [
+        { title: { contains: needle, mode: 'insensitive' } },
+        { description: { contains: needle, mode: 'insensitive' } },
+        { host: { username: { contains: needle, mode: 'insensitive' } } },
+        { host: { displayName: { contains: needle, mode: 'insensitive' } } },
+      ] } : {}),
+    },
+    // L'énumération Prisma suit l'ordre de déclaration : SCHEDULED puis LIVE. « desc » place les Lives en cours en premier.
+    orderBy: [{ status: 'desc' }, { currentViewers: 'desc' }, { scheduledAt: 'asc' }, { id: 'desc' }],
+    skip: offset,
+    take: limit + 1,
+    include: { host: true },
+  });
+  const page = rows.slice(0, limit);
+  return { items: page.map(serialize), hasMore: rows.length > limit };
 }
 
 export async function getLive(liveId: string, viewer?: User) {

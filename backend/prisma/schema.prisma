@@ -303,6 +303,8 @@ enum ModerationActionType {
   UNBAN
   DISABLE_MONETIZATION
   ENABLE_MONETIZATION
+  RESTRICT
+  UNRESTRICT
 }
 enum ProfileModerationStatus {
   ACTIVE
@@ -354,6 +356,7 @@ model User {
   profileModerationStatus ProfileModerationStatus @default(ACTIVE)
   monetizationDisabledAt DateTime?
   monetizationDisabledReason String?
+  restrictedAt DateTime?
   passwordChangedAt  DateTime?
   deletedAt          DateTime?
   createdAt          DateTime          @default(now())
@@ -370,6 +373,7 @@ model User {
   comments                Comment[]
   views                   ContentView[]
   shortWatchEvents        ShortWatchEvent[]
+  videoWatchEvents        VideoWatchEvent[]
   mentions                Mention[]
   following               Follow[]             @relation("Follower")
   followers               Follow[]             @relation("Following")
@@ -442,6 +446,7 @@ model User {
   callFavoritedBy        CallFavorite[]       @relation("CallFavoriteTarget")
   scheduledCallsMade     ScheduledCall[]      @relation("ScheduleCaller")
   scheduledCallsReceived ScheduledCall[]      @relation("ScheduleCreator")
+  notifyPrefs            Json?
   moderationActionsTargetUser ModerationAction[] @relation("ModerationTargetUser")
   monetizationSettingVersions MonetizationSettingVersion[] @relation("MonetizationVersionAdmin")
 
@@ -1059,6 +1064,7 @@ model Video {
   editStartMs Int?
   editEndMs   Int?
   coverMs     Int?
+  watchEvents VideoWatchEvent[]
 }
 
 model Short {
@@ -1623,6 +1629,9 @@ enum NotificationType {
   MODERATION
   PAID_CONTENT_PURCHASED
   GROUP_ACCESS_PURCHASED
+  CALL_SCHEDULE_REQUESTED
+  CALL_SCHEDULE_ANSWERED
+  CALL_SCHEDULE_CANCELLED
 }
 
 /// Une conversation privée entre deux utilisateurs exactement. `pairKey` = les deux identifiants triés, « a:b » (unicité de la paire).
@@ -1723,6 +1732,7 @@ model Message {
   editedAt        DateTime?
   /// Photo ou vidéo à vue unique : chaque destinataire (membres présents à l'envoi) l'ouvre une seule fois, voir ViewOnceRecipient. Jamais de texte.
   viewOnce        Boolean     @default(false)
+  downloadAllowed Boolean     @default(false)
   pinnedAt        DateTime?
   replyToId       String?
   forwardedFromId String?
@@ -2875,4 +2885,20 @@ model CallMinuteEntry {
   account CallMinuteAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@index([accountId, createdAt])
+}
+
+model VideoWatchEvent {
+  id              String   @id @default(cuid())
+  videoId         String
+  userId          String
+  clientSessionId String   @db.VarChar(64)
+  watchedMs       Int
+  completed       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clientSessionId])
+  @@index([videoId, createdAt])
 }

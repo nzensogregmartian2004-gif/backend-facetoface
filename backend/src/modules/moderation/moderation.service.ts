@@ -5,7 +5,7 @@ import { requirePermission } from '../admin/roles';
 import type { AdminPermission } from '../admin/permissions';
 
 export type ModerationTarget = 'USER'|'GROUP'|'VIDEO'|'SHORT'|'LIVE'|'COMMENT'|'MESSAGE'|'PAID_CONTENT';
-export type ModerationAction = 'WARNING'|'HIDE'|'UNHIDE'|'REMOVE'|'RESTORE'|'SUSPEND'|'BAN'|'UNSUSPEND'|'UNBAN'|'DISABLE_MONETIZATION'|'ENABLE_MONETIZATION';
+export type ModerationAction = 'WARNING'|'HIDE'|'UNHIDE'|'REMOVE'|'RESTORE'|'SUSPEND'|'BAN'|'UNSUSPEND'|'UNBAN'|'DISABLE_MONETIZATION'|'ENABLE_MONETIZATION'|'RESTRICT'|'UNRESTRICT';
 
 function assertAdmin(user: User, p: AdminPermission) {
   requirePermission(user, p);
@@ -81,7 +81,7 @@ export async function moderate(admin: User, type: ModerationTarget, id: string, 
   const target: any = await assertTarget(type, id);
   if (type === 'USER' && ['SUSPEND','BAN'].includes(action) && target.id === admin.id) throw badRequest('CANNOT_MODERATE_SELF', 'Un administrateur ne peut pas se sanctionner lui-même');
   if (type === 'USER' && target.status === 'DELETED' && ['UNSUSPEND','UNBAN','ENABLE_MONETIZATION'].includes(action)) throw badRequest('DELETED_ACCOUNT_IMMUTABLE', 'Un compte supprimé et anonymisé ne peut pas être réactivé');
-  if (type !== 'USER' && ['SUSPEND','BAN','UNSUSPEND','UNBAN','DISABLE_MONETIZATION','ENABLE_MONETIZATION'].includes(action)) throw badRequest('ACTION_NOT_ALLOWED', 'Cette action ne s’applique pas à cette cible');
+  if (type !== 'USER' && ['SUSPEND','BAN','UNSUSPEND','UNBAN','DISABLE_MONETIZATION','ENABLE_MONETIZATION','RESTRICT','UNRESTRICT'].includes(action)) throw badRequest('ACTION_NOT_ALLOWED', 'Cette action ne s’applique pas à cette cible');
 
   return prisma.$transaction(async tx => {
     let metadata: Record<string, unknown> = {};
@@ -93,6 +93,8 @@ export async function moderate(admin: User, type: ModerationTarget, id: string, 
       } else if (action === 'SUSPEND' || action === 'BAN' || action === 'UNSUSPEND' || action === 'UNBAN') {
         const next = action === 'SUSPEND' ? 'SUSPENDED' : action === 'BAN' ? 'BANNED' : 'ACTIVE';
         await tx.user.update({ where: { id }, data: { status: next } });
+      } else if (action === 'RESTRICT' || action === 'UNRESTRICT') {
+        await tx.user.update({ where: { id }, data: { restrictedAt: action === 'RESTRICT' ? new Date() : null } });
       } else if (action !== 'WARNING') {
         throw badRequest('ACTION_NOT_ALLOWED', 'Action utilisateur invalide');
       }

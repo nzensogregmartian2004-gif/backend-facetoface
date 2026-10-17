@@ -14,7 +14,7 @@ callsRouter.use(requireAuth);
 const me = (req: Parameters<typeof authed>[0]) => authed(req).user;
 const id = (req: { params: Record<string, unknown> }) => String(req.params.id);
 
-callsRouter.get('/settings', wrap(async (_req, res) => { res.json(svc.settings()); }));
+callsRouter.get('/settings', wrap(async (_req, res) => { res.json(await svc.settings()); }));
 callsRouter.get('/me/settings', wrap(async (req, res) => { res.json(await svc.getMySettings(me(req))); }));
 callsRouter.put('/me/settings', wrap(async (req, res) => { res.json(await svc.updateMySettings(me(req), body(callSettingsSchema, req))); }));
 callsRouter.get('/incoming', wrap(async (req, res) => { res.json(await svc.incomingCalls(me(req))); }));

@@ -6,13 +6,14 @@ const querySchema = z.string().trim().max(80, '80 caractères maximum').transfor
 
 export const searchQuerySchema = pageQuerySchema.extend({
   q: querySchema.optional(),
-  type: z.enum(['creators', 'users', 'videos', 'shorts']).default('creators'),
+  type: z.enum(['creators', 'users', 'videos', 'shorts', 'lives']).default('creators'),
   sort: z.enum(['popular', 'recent', 'views']).optional(),
   category: categorySchema.optional(),
 }).superRefine((v, ctx) => {
   const people = v.type === 'creators' || v.type === 'users';
   if (people && (v.q ?? '').length < 2) ctx.addIssue({ code: 'custom', path: ['q'], message: '2 caractères minimum' });
-  if (!people && !(v.q ?? '').length && !v.category) ctx.addIssue({ code: 'custom', path: ['q'], message: 'Saisissez un mot-clé ou choisissez une catégorie' });
+  if (!people && v.type !== 'lives' && !(v.q ?? '').length && !v.category) ctx.addIssue({ code: 'custom', path: ['q'], message: 'Saisissez un mot-clé ou choisissez une catégorie' });
+  if (v.type === 'lives' && v.category) ctx.addIssue({ code: 'custom', path: ['category'], message: 'Filtre de catégorie indisponible pour les Lives' });
   if (people && v.sort === 'views') ctx.addIssue({ code: 'custom', path: ['sort'], message: 'Tri par vues indisponible pour les comptes' });
   if (people && v.category) ctx.addIssue({ code: 'custom', path: ['category'], message: 'Filtre de catégorie indisponible pour les comptes' });
 });

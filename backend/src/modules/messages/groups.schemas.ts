@@ -8,6 +8,8 @@ export const groupUpdateSchema = z.object({
   entryPrice: z.number().int('Prix entier (FCFA)').nullable().optional(),
   /** Seuls les administrateurs peuvent publier dans le groupe. */
   adminsOnlyPosting: z.boolean().optional(),
+  /** Clé de la photo renvoyée par photo-upload-url ; null retire la photo. */
+  photoKey: z.string().trim().max(300).nullable().optional(),
 }).strict();
 
 /** Passation de la propriété : destinataire et confirmation explicite obligatoire (le propriétaire doit le dire). */

@@ -1,3 +1,4 @@
+import { commissionBpsFor } from '../config/commission';
 import { randomBytes } from 'node:crypto';
 import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
@@ -64,7 +65,7 @@ export async function subscribe(viewer: User, creatorId: string, input: { operat
   const existing = await prisma.creatorSubscription.findUnique({ where: { subscriberId_creatorId: { subscriberId: viewer.id, creatorId } } });
   if (existing?.status === 'ACTIVE' && existing.expiresAt && existing.expiresAt > new Date()) throw conflict('ALREADY_SUBSCRIBED', 'Vous êtes déjà abonné à ce créateur');
 
-  const split = splitRecord(plan.priceMinor, env.CREATOR_SUBSCRIPTION_COMMISSION_BPS, plan.currency);
+  const split = splitRecord(plan.priceMinor, await commissionBpsFor('CREATOR_SUBSCRIPTION.COMMISSION_BPS', env.CREATOR_SUBSCRIPTION_COMMISSION_BPS), plan.currency);
   const reference = newReference();
   const subscription = existing
     ? await prisma.creatorSubscription.update({ where: { id: existing.id }, data: { planId: plan.id, status: 'PENDING_PAYMENT', priceMinor: plan.priceMinor, currency: plan.currency, startedAt: null, expiresAt: null, cancelledAt: null } })

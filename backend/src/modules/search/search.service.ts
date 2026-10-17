@@ -6,6 +6,7 @@ import { blockedIdsFor } from '../content/access';
 import { PUBLIC_AUTHOR_SELECT, serializeMany } from '../content/content.serializer';
 import { repo, type ContentWithAuthor, type Kind } from '../content/types';
 import { toUserCards } from '../users/profile.service';
+import { searchLives } from '../live/live.service';
 import type { SearchQuery } from './search.schemas';
 
 const contains = (field: string, q: string) => ({ [field]: { contains: q, mode: 'insensitive' as const } });
@@ -56,6 +57,10 @@ async function searchContent(viewer: User, q: SearchQuery, kind: Kind, offset: n
 export async function search(viewer: User, q: SearchQuery) {
   const offset = readOffsetCursor(q.cursor);
   const blocked = await blockedIdsFor(viewer.id);
+  if (q.type === 'lives') {
+    const lives = await searchLives(q.q ?? '', offset, q.limit, blocked);
+    return { type: q.type, items: lives.items, nextCursor: lives.hasMore ? encodeCursor({ o: offset + q.limit }) : null };
+  }
   const r = q.type === 'creators' || q.type === 'users' ? await searchPeople(viewer, q, offset, blocked) : await searchContent(viewer, q, q.type === 'shorts' ? 'SHORT' : 'VIDEO', offset, blocked);
   return { type: q.type, items: r.items, nextCursor: r.hasMore ? encodeCursor({ o: offset + q.limit }) : null };
 }

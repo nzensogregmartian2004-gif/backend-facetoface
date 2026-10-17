@@ -1,3 +1,5 @@
+import { commissionBpsFor } from '../config/commission';
+import { assertNotRestricted } from '../../utils/restriction';
 import { pushNewMessage } from './messages.push';
 import { mayPostInGroup } from './groups.rules';
 import { isPreviewKeyFor, PREVIEW_MAX_BYTES } from './messages.preview';
@@ -35,7 +37,7 @@ export const settings = async () => ({
   paidMessages: {
     min: env.PAID_MESSAGE_MIN_FCFA, max: env.PAID_MESSAGE_MAX_FCFA, currency: DEFAULT_CURRENCY, currencies: SUPPORTED_CURRENCIES,
     byCurrency: Object.fromEntries(SUPPORTED_CURRENCIES.map((c) => [c, { min: limitIn(env.PAID_MESSAGE_MIN_FCFA, c), max: limitIn(env.PAID_MESSAGE_MAX_FCFA, c) }])),
-    commissionBps: env.PAID_MESSAGE_COMMISSION_BPS,
+    commissionBps: await commissionBpsFor('PAID_MESSAGE.COMMISSION_BPS', env.PAID_MESSAGE_COMMISSION_BPS),
   },
   /** Opérateurs Mobile Money utilisables (liste vide = paiements non configurés : le mobile masque le bouton « Débloquer »). */
   payments: { enabled: payments.operators().length > 0, operators: payments.operators(), feePayer: env.PAYMENT_FEE_PAYER },
@@ -73,7 +75,7 @@ async function conversationDto(viewer: User, conv: { id: string; lastMessageAt: 
   const lastMessage = previewOf(last, viewer, purchased);
   if (conv.isGroup || !otherUser) {
     return {
-      id: conv.id, isGroup: true as const, name: conv.name, photoKey: conv.photoKey, description: conv.description, allowPaidContent: conv.allowPaidContent, disappearingSeconds: conv.disappearingSeconds ?? 0,
+      id: conv.id, isGroup: true as const, name: conv.name, photoKey: conv.photoKey, photoUrl: conv.photoKey ? (objectStorage.readUrl(conv.photoKey) || null) : null, description: conv.description, allowPaidContent: conv.allowPaidContent, disappearingSeconds: conv.disappearingSeconds ?? 0,
       memberCount: conv.members.length, myRole: me.role, other: null, unreadCount: me.unreadCount, lastMessageAt: conv.lastMessageAt, lastMessage,
       canSend: true, sendBlockedReason: null,
     };
@@ -81,7 +83,7 @@ async function conversationDto(viewer: User, conv: { id: string; lastMessageAt: 
   const [card] = await toUserCards(viewer, [otherUser]);
   const perm = withPermission ? await messagingPermission(viewer, otherUser) : null;
   return {
-    id: conv.id, isGroup: false as const, name: null, photoKey: null, description: null, allowPaidContent: true, disappearingSeconds: conv.disappearingSeconds ?? 0,
+    id: conv.id, isGroup: false as const, name: null, photoKey: null, photoUrl: null, description: null, allowPaidContent: true, disappearingSeconds: conv.disappearingSeconds ?? 0,
     memberCount: conv.members.length, myRole: me.role, other: card, presence: presenceOf(otherUser), unreadCount: me.unreadCount, lastMessageAt: conv.lastMessageAt, lastMessage,
     ...(perm ? { canSend: perm.allowed, sendBlockedReason: perm.allowed ? null : perm.reason } : {}),
   };
@@ -151,8 +153,8 @@ export async function listConversations(viewer: User, o: { cursor?: string; limi
     const me = r.members.find((m) => m.userId === viewer.id)!;
     const last = r.lastMessageId ? byId.get(r.lastMessageId) ?? null : null;
     const base = { id: r.id, unreadCount: me.unreadCount, lastMessageAt: r.lastMessageAt, favorite: me.favoriteAt != null, lastMessage: previewOf(last, viewer, last ? bought.has(last.id) : false) };
-    if (r.isGroup) return { ...base, isGroup: true, name: r.name, photoKey: r.photoKey, memberCount: r.members.length, other: null };
-    return { ...base, isGroup: false, name: null, photoKey: null, memberCount: r.members.length, other: cardByConv.get(r.id) ?? null };
+    if (r.isGroup) return { ...base, isGroup: true, name: r.name, photoKey: r.photoKey, photoUrl: r.photoKey ? (objectStorage.readUrl(r.photoKey) || null) : null, memberCount: r.members.length, other: null };
+    return { ...base, isGroup: false, name: null, photoKey: null, photoUrl: null, memberCount: r.members.length, other: cardByConv.get(r.id) ?? null };
   });
   const lastRow = page[page.length - 1];
   return { items, nextCursor: rows.length > o.limit && lastRow ? encodeCursor({ t: lastRow.lastMessageAt!.getTime(), i: lastRow.id }) : null };
@@ -209,13 +211,14 @@ export async function requestMediaUpload(viewer: User, b: { conversationId: stri
   return { upload: { ...objectStorage.presignUpload(key, b.contentType, env.UPLOAD_URL_TTL_SECONDS), key } };
 }
 
-type SendInput = { text?: string; sticker?: string; mediaKey?: string; previewKey?: string; poll?: { question: string; options: string[]; allowMultiple?: boolean }; event?: { title: string; startsAt: Date; place?: string }; location?: { latitude: number; longitude: number; label?: string }; price?: number; currency?: string; clientId?: string; viewOnce?: boolean; durationMs?: number };
+type SendInput = { text?: string; sticker?: string; mediaKey?: string; previewKey?: string; downloadAllowed?: boolean; poll?: { question: string; options: string[]; allowMultiple?: boolean }; event?: { title: string; startsAt: Date; place?: string }; location?: { latitude: number; longitude: number; label?: string }; price?: number; currency?: string; clientId?: string; viewOnce?: boolean; durationMs?: number };
 
 export async function sendMessage(viewer: User, conversationId: string, b: SendInput) {
   if (b.clientId) {
     const dup = await prisma.message.findUnique({ where: { senderId_clientId: { senderId: viewer.id, clientId: b.clientId } } });
     if (dup) return { created: false, message: (await serializeMessages([dup], viewer))[0] };
   }
+  assertNotRestricted(viewer);
   const { conv, me, other } = await loadConversation(viewer, conversationId);
   if (!mayPostInGroup({ isGroup: conv.isGroup, adminsOnlyPosting: conv.adminsOnlyPosting, role: me.role, isOwner: conv.ownerId === viewer.id })) throw forbidden('POSTING_ADMINS_ONLY', 'Seuls les administrateurs peuvent publier dans ce groupe');
   if (other) {
@@ -256,6 +259,8 @@ export async function sendMessage(viewer: User, conversationId: string, b: SendI
     media = { key: b.mediaKey, mime, size: info.size };
   }
 
+  // Téléchargement : seulement pour un média non éphémère ni payant.
+  if (b.downloadAllowed && (!media || b.viewOnce || b.price != null)) throw badRequest('DOWNLOAD_NOT_ALLOWED', 'Téléchargement non disponible pour ce message');
   // Aperçu flouté : seulement avec un média payant, émis pour CET expéditeur et CETTE conversation, et petit.
   let previewKey: string | null = null;
   if (b.previewKey) {
@@ -271,7 +276,7 @@ export async function sendMessage(viewer: User, conversationId: string, b: SendI
       const m = await tx.message.create({
         data: {
           conversationId, senderId: viewer.id, kind: b.poll ? 'POLL' : b.event ? 'EVENT' : b.location ? 'LOCATION' : b.sticker ? 'STICKER' : media ? 'MEDIA' : 'TEXT', text: b.sticker ?? (b.text || null), latitude: b.location?.latitude ?? null, longitude: b.location?.longitude ?? null, placeLabel: b.location?.label ?? null, eventTitle: b.event?.title ?? null, eventStartsAt: b.event?.startsAt ?? null, eventPlace: b.event?.place ?? null, poll: b.poll ? { create: { question: b.poll.question, allowMultiple: b.poll.allowMultiple ?? false, options: { create: b.poll.options.map((text, position) => ({ text, position })) } } } : undefined,
-          previewKey, mediaKey: media?.key ?? null, mediaMime: media?.mime ?? null, mediaSize: media?.size ?? null, mediaDurationMs: media ? b.durationMs ?? null : null,
+          previewKey, downloadAllowed: !!b.downloadAllowed && !!media && !b.viewOnce && b.price == null, mediaKey: media?.key ?? null, mediaMime: media?.mime ?? null, mediaSize: media?.size ?? null, mediaDurationMs: media ? b.durationMs ?? null : null,
           price: b.price ?? null, currency: b.price != null ? (b.currency ?? DEFAULT_CURRENCY) : null, clientId: b.clientId ?? null, viewOnce: b.viewOnce === true, replyToId: null, createdAt: now, expiresAt: !b.viewOnce && conv.disappearingSeconds ? new Date(now.getTime() + conv.disappearingSeconds * 1000) : null,
         },
       });
@@ -370,7 +375,7 @@ export async function unlockMessage(viewer: User, messageId: string, input: { op
 
   const currency = m.currency ?? DEFAULT_CURRENCY;
   assertMobileMoneyCurrency(currency);
-  const split = splitRecord(m.price, env.PAID_MESSAGE_COMMISSION_BPS, currency);
+  const split = splitRecord(m.price, await commissionBpsFor('PAID_MESSAGE.COMMISSION_BPS', env.PAID_MESSAGE_COMMISSION_BPS), currency);
   const reference = newReference();
   const attempt = { reference, operator: input.operator, payerPhoneHint: input.phone.slice(-4), initiatedAt: new Date(), reviewReason: null, providerPayload: undefined };
   let purchaseId: string;

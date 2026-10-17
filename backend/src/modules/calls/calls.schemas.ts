@@ -8,7 +8,7 @@ export const requestCallSchema = z.object({
 }).strict();
 
 export const callSettingsSchema = z.object({
-  pricingMode: z.enum(['PER_MINUTE', 'PER_SESSION'], { message: 'Mode de tarification invalide' }).optional(),
+  pricingMode: z.enum(['PER_MINUTE'], { message: 'La tarification à la session n’est plus proposée : les appels se facturent à la minute.' }).optional(),
   currency: currencySchema.optional(),
   audioPrice: z.number().int('Montant entier (unités mineures)').min(1, 'Montant invalide').nullable().optional(),
   videoPrice: z.number().int('Montant entier (unités mineures)').min(1, 'Montant invalide').nullable().optional(),

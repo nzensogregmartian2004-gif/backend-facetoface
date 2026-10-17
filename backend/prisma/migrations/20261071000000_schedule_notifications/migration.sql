@@ -1,0 +1,4 @@
+-- Notifications des appels planifiés.
+ALTER TYPE "NotificationType" ADD VALUE 'CALL_SCHEDULE_REQUESTED';
+ALTER TYPE "NotificationType" ADD VALUE 'CALL_SCHEDULE_ANSWERED';
+ALTER TYPE "NotificationType" ADD VALUE 'CALL_SCHEDULE_CANCELLED';

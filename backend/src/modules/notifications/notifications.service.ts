@@ -1,3 +1,4 @@
+import { isNotificationEnabled } from './notifyPrefs';
 import type { NotificationType, Prisma } from '@prisma/client';
 import { publishRealtime } from '../../realtime/realtime';
 import { sendPush, type PushPayload } from './push.service';
@@ -21,7 +22,7 @@ export type NotifyInput = {
 /** Taille des lots pour `notifyMany` : évite de saturer le pool de connexions avec un grand nombre d'abonnés. */
 const NOTIFY_CHUNK = 20;
 
-export async function notify(db: Prisma.TransactionClient | any, input: NotifyInput) {
+async function deliver(db: Prisma.TransactionClient | any, input: NotifyInput) {
   const { pushPayload, ...row } = input;
 
   if (row.type === 'NEW_MESSAGE' && row.targetId) {
@@ -51,10 +52,21 @@ export async function notify(db: Prisma.TransactionClient | any, input: NotifyIn
 }
 
 /** Notifie plusieurs destinataires avec le même contenu (ex. nouveau Live pour les abonnés). Renvoie le nombre de destinataires. */
+/** Notifie un destinataire, si son réglage pour cette catégorie est activé. Renvoie null si la catégorie est coupée. */
+export async function notify(db: Prisma.TransactionClient | any, input: NotifyInput) {
+  const recipient = await db.user.findUnique({ where: { id: input.userId }, select: { notifyPrefs: true } });
+  if (recipient && !isNotificationEnabled(recipient.notifyPrefs, input.type)) return null;
+  return deliver(db, input);
+}
+
 export async function notifyMany(db: Prisma.TransactionClient | any, userIds: string[], input: Omit<NotifyInput, 'userId'>) {
-  const unique = [...new Set(userIds)];
+  // Réglages de tous les destinataires en une requête ; seuls ceux qui veulent ce type sont notifiés.
+  const all = [...new Set(userIds)];
+  const prefs = await db.user.findMany({ where: { id: { in: all } }, select: { id: true, notifyPrefs: true } });
+  const byId = new Map<string, unknown>(prefs.map((p: { id: string; notifyPrefs: unknown }) => [p.id, p.notifyPrefs]));
+  const unique = all.filter((id) => isNotificationEnabled(byId.get(id), input.type));
   for (let i = 0; i < unique.length; i += NOTIFY_CHUNK) {
-    await Promise.all(unique.slice(i, i + NOTIFY_CHUNK).map((userId) => notify(db, { ...input, userId })));
+    await Promise.all(unique.slice(i, i + NOTIFY_CHUNK).map((userId) => deliver(db, { ...input, userId })));
   }
   return unique.length;
 }

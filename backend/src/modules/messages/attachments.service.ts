@@ -1,3 +1,4 @@
+import { commissionBpsFor } from '../config/commission';
 import { Prisma, type User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { env } from '../../config/env';
@@ -58,7 +59,7 @@ export async function unlock(viewer: User, attachmentId: string, input: { operat
   if (existing?.status === 'PENDING') throw conflict('PAYMENT_IN_PROGRESS', 'Un paiement est déjà en cours', { purchaseId: existing.id });
   if (existing?.status === 'REVIEW') throw conflict('PAYMENT_UNDER_REVIEW', 'Votre paiement est en cours de vérification', { purchaseId: existing.id });
   const currency = a.currency ?? DEFAULT_CURRENCY; assertMobileMoneyCurrency(currency);
-  const split = splitRecord(a.price, env.PAID_MESSAGE_COMMISSION_BPS, currency); const ref = reference();
+  const split = splitRecord(a.price, await commissionBpsFor('PAID_MESSAGE.COMMISSION_BPS', env.PAID_MESSAGE_COMMISSION_BPS), currency); const ref = reference();
   let id: string;
   if (existing) {
     const r = await prisma.attachmentPurchase.updateMany({ where: { id: existing.id, status: 'FAILED' }, data: { status: 'PENDING', attempts: { increment: 1 }, ...split, reference: ref, initiatedAt: new Date(), operator: input.operator, payerPhoneHint: input.phone.slice(-4), externalRef: null, paidAt: null, reviewReason: null, providerPayload: Prisma.DbNull } });

@@ -1,3 +1,4 @@
+import { assertNotRestricted } from '../../utils/restriction';
 import type { User } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { badRequest, conflict, forbidden, notFound } from '../../utils/errors';
@@ -14,6 +15,7 @@ async function member(userId: string, conversationId: string) {
 }
 
 export async function create(user: User, input: { conversationId: string; type: 'AUDIO'|'VIDEO' }) {
+  assertNotRestricted(user);
   assertCallsConfigured(callProvider.configured());
   const m = await member(user.id, input.conversationId);
   const conversation = await prisma.conversation.findUnique({ where: { id: input.conversationId }, select: { id: true, isGroup: true } });

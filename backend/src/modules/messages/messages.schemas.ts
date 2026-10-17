@@ -19,6 +19,8 @@ export const sendMessageSchema = z.object({
   mediaKey: z.string().min(1).max(300).optional(),
   /** Miniature floutée d'un média payant (jamais le média lui-même). */
   previewKey: z.string().min(1).max(300).optional(),
+  /** Téléchargement autorisé pour ce média (désactivé par défaut). */
+  downloadAllowed: z.boolean().optional(),
   price: z.number().int('Montant entier (unités mineures)').min(1, 'Montant invalide').optional(),
   currency: currencySchema.optional(),
   clientId: z.string().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/, 'Identifiant client invalide').optional(),

@@ -1,3 +1,4 @@
+import { commissionBpsFor } from '../config/commission';
 import { randomBytes } from 'node:crypto';
 import { Prisma, type User } from '@prisma/client';
 import { prisma } from '../../config/db';
@@ -32,7 +33,7 @@ export async function purchase(user: User, kind: Kind, contentId: string, input:
   if (existing?.status === 'PENDING') throw conflict('PAYMENT_IN_PROGRESS','Un paiement est déjà en cours',{purchaseId:existing.id});
   if (existing?.status === 'REVIEW') throw conflict('PAYMENT_UNDER_REVIEW','Votre paiement est en cours de vérification',{purchaseId:existing.id});
 
-  const split = splitRecord(row.price, env.PAID_CONTENT_COMMISSION_BPS, row.currency);
+  const split = splitRecord(row.price, await commissionBpsFor('PAID_CONTENT.COMMISSION_BPS', env.PAID_CONTENT_COMMISSION_BPS), row.currency);
   const ref = reference();
   let purchaseId: string;
   if (existing) {

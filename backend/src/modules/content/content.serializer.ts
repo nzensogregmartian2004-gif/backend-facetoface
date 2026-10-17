@@ -4,6 +4,7 @@ import { prisma } from '../../config/db';
 import { objectStorage } from '../../utils/objectStorage';
 import { serializePublic } from '../../utils/serializers';
 import { KINDS, type ContentWithPublicAuthor, type Kind } from './types';
+import { downloadsEnabledNow } from './downloads.setting';
 
 export const shareUrl = (kind: Kind, id: string) => `${(env.SHARE_BASE_URL ?? env.PUBLIC_BASE_URL).replace(/\/$/, '')}/${KINDS[kind].route}/${id}`;
 
@@ -32,7 +33,7 @@ export function serializeContent(kind: Kind, row: ContentWithPublicAuthor, viewe
     visibility: row.visibility,
     status: row.status,
     subscriptionOnly: row.subscriptionOnly,
-    allowDownload: isOwner ? row.allowDownload : row.allowDownload && env.DOWNLOADS_ENABLED, // le propriétaire voit son réglage ; les autres, le réglage effectif
+    allowDownload: isOwner ? row.allowDownload : row.allowDownload && downloadsEnabledNow(), // le propriétaire voit son réglage ; les autres, le réglage effectif
     allowComments: row.allowComments,
     thumbnailUrl: thumbUrl(row.thumbnailKey),
     durationSeconds: row.durationSeconds,

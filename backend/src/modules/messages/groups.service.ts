@@ -49,7 +49,7 @@ export async function groupDto(viewer: User, conv: any) {
   const cards = await toUserCards(viewer, conv.members.map((m: any) => m.user));
   const cardById = new Map(cards.map((c: any) => [c.id, c]));
   return {
-    id: conv.id, isGroup: true, name: conv.name, photoKey: conv.photoKey, description: conv.description,
+    id: conv.id, isGroup: true, name: conv.name, photoKey: conv.photoKey, photoUrl: conv.photoKey ? (objectStorage.readUrl(conv.photoKey) || null) : null, description: conv.description,
     allowPaidContent: conv.allowPaidContent, adminsOnlyPosting: conv.adminsOnlyPosting, unreadCount: me.unreadCount, lastMessageAt: conv.lastMessageAt,
     entry: conv.entryPrice != null ? { price: conv.entryPrice, currency: conv.entryCurrency ?? DEFAULT_CURRENCY } : null, isOwner: conv.ownerId === viewer.id, owner: conv.ownerId ? (cardById.get(conv.ownerId) ?? null) : null,
     members: conv.members.map((m: any) => ({ id: m.userId, role: m.role, user: cardById.get(m.userId) ?? null })),
@@ -74,12 +74,18 @@ export async function updateGroup(viewer: User, conversationId: string, input: {
     if (input.entryPrice === null) { data.entryPrice = null; data.entryCurrency = null; }
     else { assertPriceInRange(input.entryPrice, DEFAULT_CURRENCY, env.PAID_MESSAGE_MIN_FCFA, env.PAID_MESSAGE_MAX_FCFA, 'GROUP_PRICE_INVALID', 'entryPrice'); data.entryPrice = input.entryPrice; data.entryCurrency = DEFAULT_CURRENCY; }
   }
+  // Ancienne photo : retirée du stockage après l'enregistrement du nouveau réglage (voir plus bas).
+  const previousPhoto = input.photoKey !== undefined ? ((await prisma.conversation.findUnique({ where: { id: conversationId }, select: { photoKey: true } }))?.photoKey ?? null) : null;
   if (input.photoKey !== undefined) {
     if (input.photoKey !== null && !input.photoKey.startsWith(`groups/${conversationId}/`)) throw badRequest('INVALID_GROUP_PHOTO', 'Photo de groupe invalide');
     if (input.photoKey) { const info = await objectStorage.head(input.photoKey); if (!info || !(info.contentType ?? '').toLowerCase().startsWith('image/')) throw badRequest('INVALID_GROUP_PHOTO', 'Photo de groupe invalide'); if (info.size > 8 * 1024 * 1024) throw badRequest('GROUP_PHOTO_TOO_LARGE', 'Photo trop volumineuse'); }
     data.photoKey = input.photoKey;
   }
   const conv = await prisma.conversation.update({ where: { id: conversationId }, data, include: { members: { include: { user: true } } } });
+  if (input.photoKey !== undefined && previousPhoto && previousPhoto !== input.photoKey) {
+    // Échec de suppression sans conséquence : le fichier orphelin pourra être nettoyé plus tard.
+    try { await objectStorage.delete(previousPhoto); } catch { /* ignoré */ }
+  }
   return { group: await groupDto(viewer, conv) };
 }
 

@@ -69,6 +69,8 @@ export function serializeMessage(m: Message, viewer: User, purchased: boolean, p
     media: hide || !m.mediaKey ? null : {
       // URL TOUJOURS signée et de courte durée (jamais le CDN public) : une URL permanente contournerait le paiement et exposerait les conversations privées.
       url: objectStorage.privateReadUrl(m.mediaKey) || null,
+      // URL de téléchargement uniquement si l'expéditeur l'a autorisé.
+      downloadUrl: m.downloadAllowed && !m.viewOnce && m.price == null ? objectStorage.downloadUrl(m.mediaKey, `media-${m.id}`) : null,
       mimeType: m.mediaMime,
       type: mediaTypeOf(m.mediaMime),
       durationMs: m.mediaDurationMs ?? null,
